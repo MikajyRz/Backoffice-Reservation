@@ -1,0 +1,98 @@
+WORKFLOW D'UPLOAD DE FICHIERS
+=============================
+
+1. CONFIGURATION REQUIS
+- @MultipartConfig sur le FrontServlet
+- Dossier "uploads" à la racine du projet
+- Dépendance JSTL pour les JSP
+
+2. COTÉ CLIENT (uploadFormS10.jsp)
+<!-- Formulaire d'upload -->
+<form action="${pageContext.request.contextPath}/upload" 
+      method="post" 
+      enctype="multipart/form-data">
+    <input type="file" name="fichier1"><br>
+    <input type="submit" value="Upload">
+</form>
+
+3. CONTROLEUR (EtudiantController.java)
+@PostMapping("/upload")
+public ModelView upload(Etudiant e, Map<String, byte[]> files) {
+    for (var entry : files.entrySet()) {
+        FileStorage.save(entry.getValue(), entry.getKey());
+    }
+    ModelView mv = new ModelView("uploadResult.jsp");
+    mv.addData("nom", e.getNom());
+    mv.addData("files", files);
+    return mv;
+}
+
+4. UTILITAIRE (FileStorage.java)
+public static void save(byte[] fileData, String fileName) {
+    File uploadsDir = new File("uploads");
+    if (!uploadsDir.exists()) {
+        uploadsDir.mkdir();
+    }
+    // Gestion des doublons
+    File file = new File(uploadsDir, fileName);
+    int counter = 1;
+    while (file.exists()) {
+        String newName = counter + "_" + fileName;
+        file = new File(uploadsDir, newName);
+        counter++;
+    }
+    try (FileOutputStream fos = new FileOutputStream(file)) {
+        fos.write(fileData);
+    } catch (IOException e) {
+        e.printStackTrace();
+    }
+}
+
+5. VUE (uploadResult.jsp)
+<%@ taglib prefix="c" uri="jakarta.tags.core" %>
+<%@ taglib prefix="fn" uri="jakarta.tags.functions" %>
+
+<c:if test="${not empty files}">
+    <ul>
+        <c:forEach var="entry" items="${files}">
+            <li>${entry.key} (${fn:length(entry.value)} octets)</li>
+        </c:forEach>
+    </ul>
+</c:if>
+
+6. FRONTSERVLET (extrait)
+// Gestion des retours void
+if (method.getReturnType() == void.class) {
+    response.setStatus(204); // No Content
+    return;
+}
+
+// Gestion des types simples
+if (isSimpleType(returnType)) {
+    response.setContentType("text/plain");
+    response.getWriter().write(String.valueOf(result));
+    return;
+}
+- Affichage des fichiers reçus avec leurs tailles
+- Gestion des cas d'erreur (fichiers manquants, etc.)
+
+7. EXEMPLE D'UTILISATION
+@PostMapping("/upload")
+public ModelView upload(Map<String, byte[]> files) {
+    for (Map.Entry<String, byte[]> file : files.entrySet()) {
+        FileStorage.save(file.getValue(), file.getKey());
+    }
+    return new ModelView("uploadResult.jsp");
+}
+
+8. SÉCURITÉ
+- Validation des types de fichiers
+- Vérification de la taille maximale
+- Nettoyage des noms de fichiers
+- Stockage en dehors du contexte web
+
+9. POINTS D'EXTENSION
+- Support de l'upload asynchrone
+- Barre de progression
+- Compression des images
+- Stockage cloud

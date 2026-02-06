@@ -1,21 +1,25 @@
-# Build / compilation
-*.class
-*.jar
-*.war
+# === Fichiers/dirs spécifiques au projet test ===
 /build/
-/target/
+/framework_build/com
 /out/
-/framework_build/
+/target/
+/bin/
+/dist/
+/*.war
+/*.jar
 
-
-# IDE / outils
-.idea/
-*.iml
-.project
-.classpath
-.settings/
-.txt
-
-# OS
+# === Logs, temp, backups ===
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
+*.orig
 .DS_Store
 Thumbs.db
+
+# === IDE: VS Code ===
+.vscode/
+
+# === OS divers ===
+Desktop.ini
