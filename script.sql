@@ -22,3 +22,5 @@ CREATE TABLE reservation (
         ON UPDATE CASCADE
         ON DELETE RESTRICT
 );
+
+INSERT INTO hotel(nom) VALUES ('Hotel Test');
