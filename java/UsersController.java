@@ -1,11 +1,14 @@
 package test.java;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
 import com.annotations.ControllerAnnotation;
 import com.annotations.GetMapping;
 import com.annotations.HandleUrl;
 import com.annotations.Param;
 import com.annotations.PostMapping;
 import com.classes.ModelView;
+import com.utils.DbUtil;
 
 // Contrôleur de test pour les URLs dynamiques avec paramètre de chemin
 @ControllerAnnotation("/user")
@@ -25,9 +28,20 @@ public class UsersController {
         return mv;
     }
 
-        // Traite le résultat du formulaire
+    // Traite le résultat du formulaire
     @PostMapping("/users/result")
     public ModelView userFormResult(@Param("nom") String nom, String prenom, int age) {
+
+        try (Connection con = DbUtil.getConnection();
+             PreparedStatement ps = con.prepareStatement(
+                 "INSERT INTO users(nom, prenom, age) VALUES (?, ?, ?)")) {
+            ps.setString(1, nom);
+            ps.setString(2, prenom);
+            ps.setInt(3, age);
+            ps.executeUpdate();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
 
         ModelView mv = new ModelView();
         mv.setView("formulaireResult.jsp");

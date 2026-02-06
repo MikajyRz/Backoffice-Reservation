@@ -3,7 +3,7 @@ chcp 65001 >nul
 setlocal enabledelayedexpansion
 
 
-set APP_NAME=Vraiappli
+set APP_NAME=BackofficeReservation
 set WAR_NAME=%APP_NAME%.war
 
 set JAVA_HOME=C:\Program Files\Java\jdk-17
@@ -72,7 +72,7 @@ dir /s /b java\*.java > sources_test.txt 2>nul
 if exist sources_test.txt (
     findstr /r "." sources_test.txt >nul 2>&1
     if !errorlevel! equ 0 (
-        javac -parameters -cp "..\framework\lib\servlet-api.jar;framework.jar" -d webapp\WEB-INF\classes @sources_test.txt
+        javac -parameters -cp "%FRAMEWORK_SRC%\lib\servlet-api.jar;framework.jar" -d webapp\WEB-INF\classes @sources_test.txt
         if !errorlevel! equ 0 (
             echo Ô£à Fichiers de test compilés
         ) else (
@@ -109,6 +109,13 @@ echo Copie du framework dans WEB-INF\lib...
 copy framework.jar webapp\WEB-INF\lib\ >nul
 del webapp\WEB-INF\lib\servlet-api.jar 2>nul
 echo Ô£à Framework JAR copi├® dans WEB-INF\lib
+
+for %%F in (postgresql-*.jar) do (
+    copy "%%F" webapp\WEB-INF\lib\ >nul
+)
+for %%F in ("%FRAMEWORK_SRC%\lib\postgresql-*.jar") do (
+    if exist "%%~fF" copy "%%~fF" webapp\WEB-INF\lib\ >nul
+)
 
 echo ======================================
 echo 5) G├®n├®ration du WAR
