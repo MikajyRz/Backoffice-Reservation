@@ -1,0 +1,21 @@
+# Build / compilation
+*.class
+*.jar
+*.war
+/build/
+/target/
+/out/
+/framework_build/
+
+
+# IDE / outils
+.idea/
+*.iml
+.project
+.classpath
+.settings/
+.txt
+
+# OS
+.DS_Store
+Thumbs.db
