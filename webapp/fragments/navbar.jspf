@@ -1,0 +1,9 @@
+<div class="topbar">
+    <div class="topbar-inner">
+        <div class="brand">Backoffice Reservations</div>
+        <nav class="nav">
+            <a class="nav-link" href="${pageContext.request.contextPath}/">Accueil</a>
+            <a class="nav-link" href="${pageContext.request.contextPath}/reservation/form">Creer une reservation</a>
+        </nav>
+    </div>
+</div>
