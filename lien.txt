@@ -1,0 +1,2 @@
+https://backoffice-reservation.onrender.com/BackofficeReservation/
+https://backoffice-reservation.onrender.com/BackofficeReservation/api/reservations
