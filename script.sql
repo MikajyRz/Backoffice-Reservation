@@ -23,6 +23,12 @@ CREATE TABLE reservation (
         ON DELETE RESTRICT
 );
 
+CREATE TABLE api_token (
+    id SERIAL PRIMARY KEY,
+    token VARCHAR(128) NOT NULL UNIQUE,
+    date_expiration TIMESTAMP NOT NULL
+);
+
 INSERT INTO hotel(nom) VALUES ('Colbert');
 INSERT INTO hotel(nom) VALUES ('Novotel');
 INSERT INTO hotel(nom) VALUES ('Ibis');
