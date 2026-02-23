@@ -1,8 +1,8 @@
 FROM tomcat:10.1-jdk17
 
-WORKDIR /usr/local/tomcat
+RUN rm -rf /usr/local/tomcat/webapps/*
 
-COPY build/BackofficeReservation.war /tmp/BackofficeReservation.war
+COPY build/BackofficeReservation.war /usr/local/tomcat/webapps/BackofficeReservation.war
 COPY entrypoint.sh /entrypoint.sh
 
 RUN chmod +x /entrypoint.sh
