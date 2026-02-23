@@ -12,7 +12,7 @@ rm -f /usr/local/tomcat/webapps/BackofficeReservation.war || true
 mkdir -p /usr/local/tomcat/webapps/BackofficeReservation
 
 cd /usr/local/tomcat/webapps/BackofficeReservation
-jar -xf /tmp/BackofficeReservation.war
+jar -xf /usr/local/tomcat/backoffice.war
 
 # Génération framework.properties à partir des variables d'env
 mkdir -p /usr/local/tomcat/webapps/BackofficeReservation/WEB-INF/classes
