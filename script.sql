@@ -29,10 +29,23 @@ CREATE TABLE api_token (
     date_expiration TIMESTAMP NOT NULL
 );
 
+CREATE TABLE voiture (
+    id SERIAL PRIMARY KEY,
+    immatricule VARCHAR(20) NOT NULL UNIQUE,
+    type_carburant VARCHAR(2) NOT NULL,
+    nb_place INTEGER NOT NULL CHECK (nb_place > 0),
+    CONSTRAINT ck_voiture_type_carburant CHECK (type_carburant IN ('E', 'D', 'El', 'H'))
+);
+
 INSERT INTO hotel(nom) VALUES ('Colbert');
 INSERT INTO hotel(nom) VALUES ('Novotel');
 INSERT INTO hotel(nom) VALUES ('Ibis');
 INSERT INTO hotel(nom) VALUES ('Lokanga');
+
+INSERT INTO voiture(immatricule, type_carburant, nb_place) VALUES ('1234TAA', 'E', 5);
+INSERT INTO voiture(immatricule, type_carburant, nb_place) VALUES ('4567TAB', 'D', 4);
+INSERT INTO voiture(immatricule, type_carburant, nb_place) VALUES ('8901TAC', 'El', 5);
+INSERT INTO voiture(immatricule, type_carburant, nb_place) VALUES ('2222TAD', 'H', 7);
 
 INSERT INTO reservation(id_client, nombre_passager, date_heure_arrive, id_hotel) VALUES
 ('4631', 11, '2026-02-05 00:01:00', 3);
