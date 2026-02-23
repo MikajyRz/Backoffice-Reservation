@@ -1,13 +1,12 @@
-FROM maven:3.9-eclipse-temurin-17 AS build
-
-WORKDIR /app
-COPY . .
-RUN mvn clean package -DskipTests
-
 FROM tomcat:10.1-jdk17
 
-RUN rm -rf /usr/local/tomcat/webapps/*
-COPY --from=build /app/target/*.war /usr/local/tomcat/webapps/BackofficeReservation.war
+WORKDIR /usr/local/tomcat
+
+COPY build/BackofficeReservation.war /tmp/BackofficeReservation.war
+COPY entrypoint.sh /entrypoint.sh
+
+RUN chmod +x /entrypoint.sh
 
 EXPOSE 8080
-CMD ["catalina.sh", "run"]
+
+ENTRYPOINT ["/entrypoint.sh"]
