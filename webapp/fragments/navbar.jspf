@@ -4,6 +4,7 @@
         <nav class="nav">
             <a class="nav-link" href="${pageContext.request.contextPath}/">Accueil</a>
             <a class="nav-link" href="${pageContext.request.contextPath}/reservation/form">Creer une reservation</a>
+            <a class="nav-link" href="${pageContext.request.contextPath}/voiture">Voitures</a>
         </nav>
     </div>
 </div>
