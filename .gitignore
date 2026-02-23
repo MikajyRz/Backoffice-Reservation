@@ -1,5 +1,5 @@
 # === Fichiers/dirs spécifiques au projet test ===
-/build/
+!/build/
 /framework_build/com
 /out/
 /target/
