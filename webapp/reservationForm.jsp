@@ -38,8 +38,8 @@
                 </div>
 
                 <div>
-                    <label for="id_hotel">Id hôtel</label>
-                    <input type="number" id="id_hotel" name="id_hotel" min="1" placeholder="Ex: 10" required />
+                    <label for="id_lieu">Id lieu</label>
+                    <input type="number" id="id_lieu" name="id_lieu" min="1" placeholder="Ex: 2" required />
                 </div>
             </div>
 
