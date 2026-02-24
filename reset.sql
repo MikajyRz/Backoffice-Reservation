@@ -1,3 +1,13 @@
+-- Script de réinitialisation de la base de données
+-- Supprime les tables existantes
+DROP TABLE IF EXISTS distance CASCADE;
+DROP TABLE IF EXISTS reservation CASCADE;
+DROP TABLE IF EXISTS api_token CASCADE;
+DROP TABLE IF EXISTS parametre CASCADE;
+DROP TABLE IF EXISTS lieu CASCADE;
+DROP TABLE IF EXISTS voiture CASCADE;
+
+-- Recréation des tables
 CREATE TABLE lieu (
     id SERIAL PRIMARY KEY,
     code VARCHAR(10) NOT NULL UNIQUE,
@@ -42,33 +52,3 @@ CREATE TABLE distance (
     CONSTRAINT fk_distance_from FOREIGN KEY (from_lieu) REFERENCES lieu(id),
     CONSTRAINT fk_distance_to FOREIGN KEY (to_lieu) REFERENCES lieu(id)
 );
-
--- Création des lieux avec IDs connus
-INSERT INTO lieu(id, code, libelle) VALUES (1, 'TNR', 'Ivato Aeroport');
-INSERT INTO lieu(id, code, libelle) VALUES (2, 'HOT1', 'Hotel Carlton');
-INSERT INTO lieu(id, code, libelle) VALUES (3, 'HOT2', 'Hotel Lokanga');
-INSERT INTO lieu(id, code, libelle) VALUES (4, 'HOT3', 'Hotel Ibis');
-INSERT INTO lieu(id, code, libelle) VALUES (5, 'HOT4', 'Hotel Lokanga');
-
--- Distances
-INSERT INTO distance(from_lieu, to_lieu, kilometer) VALUES (5, 1, 12);
-
--- Voitures
-INSERT INTO voiture(immatricule, type_carburant, nb_place) VALUES 
-('1234TAA', 'E', 5),
-('4567TAB', 'D', 4),
-('8901TAC', 'El', 5),
-('2222TAD', 'H', 7);
-
--- Réservations
-INSERT INTO reservation(id_client, nombre_passager, date_heure_arrive, id_lieu) VALUES
-('4631', 11, '2026-02-05 00:01:00', 4),
-('4394', 1, '2026-02-05 23:55:00', 4),
-('8054', 2, '2026-02-09 10:17:00', 2),
-('1432', 4, '2026-02-01 15:25:00', 3),
-('7861', 4, '2026-01-28 07:11:00', 2),
-('3308', 5, '2026-01-28 07:45:00', 2),
-('4484', 13, '2026-02-28 08:45:00', 3),
-('9687', 8, '2026-02-28 13:00:00', 3),
-('6302', 7, '2026-02-15 13:00:00', 2),
-('8640', 1, '2026-02-18 22:55:00', 5);

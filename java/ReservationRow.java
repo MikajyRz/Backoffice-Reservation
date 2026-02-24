@@ -5,19 +5,19 @@ public class ReservationRow {
     private String id_client;
     private int nombre_passager;
     private String date_heure_arrive;
-    private int id_hotel;
-    private String hotel_nom;
+    private int id_lieu;
+    private String lieu_nom;
 
     public ReservationRow() {
     }
 
-    public ReservationRow(int id, String id_client, int nombre_passager, String date_heure_arrive, int id_hotel, String hotel_nom) {
+    public ReservationRow(int id, String id_client, int nombre_passager, String date_heure_arrive, int id_lieu, String lieu_nom) {
         this.id = id;
         this.id_client = id_client;
         this.nombre_passager = nombre_passager;
         this.date_heure_arrive = date_heure_arrive;
-        this.id_hotel = id_hotel;
-        this.hotel_nom = hotel_nom;
+        this.id_lieu = id_lieu;
+        this.lieu_nom = lieu_nom;
     }
 
     public int getId() {
@@ -52,19 +52,19 @@ public class ReservationRow {
         this.date_heure_arrive = date_heure_arrive;
     }
 
-    public int getId_hotel() {
-        return id_hotel;
+    public int getId_lieu() {
+        return id_lieu;
     }
 
-    public void setId_hotel(int id_hotel) {
-        this.id_hotel = id_hotel;
+    public void setId_lieu(int id_lieu) {
+        this.id_lieu = id_lieu;
     }
 
-    public String getHotel_nom() {
-        return hotel_nom;
+    public String getLieu_nom() {
+        return lieu_nom;
     }
 
-    public void setHotel_nom(String hotel_nom) {
-        this.hotel_nom = hotel_nom;
+    public void setLieu_nom(String lieu_nom) {
+        this.lieu_nom = lieu_nom;
     }
 }

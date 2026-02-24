@@ -1,0 +1,6 @@
+Generation Token: 
+java -cp "webapp/WEB-INF/classes;webapp/WEB-INF/lib/*;..\Framework\lib\*" test.java.TokenGeneratorMain
+
+Reinitialisation DB: 
+java -cp "webapp/WEB-INF/classes;webapp/WEB-INF/lib/*;..\Framework\lib\*" test.java.PopulateDataMain
+
