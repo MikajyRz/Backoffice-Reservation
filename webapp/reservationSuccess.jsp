@@ -25,7 +25,7 @@
             <div><strong>id_client:</strong> ${id_client}</div>
             <div><strong>nombre_passager:</strong> ${nombre_passager}</div>
             <div><strong>date_heure_arrive:</strong> ${date_heure_arrive}</div>
-            <div><strong>id_hotel:</strong> ${id_hotel}</div>
+            <div><strong>id_lieu:</strong> ${id_lieu}</div>
         </div>
 
         <div class="form-actions">
