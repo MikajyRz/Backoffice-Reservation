@@ -72,3 +72,25 @@ INSERT INTO reservation(id_client, nombre_passager, date_heure_arrive, id_lieu) 
 ('9687', 8, '2026-02-28 13:00:00', 3),
 ('6302', 7, '2026-02-15 13:00:00', 2),
 ('8640', 1, '2026-02-18 22:55:00', 5);
+
+
+
+
+-- Ce script permet de resynchroniser les séquences (AUTO_INCREMENT) de PostgreSQL
+-- avec les IDs maximums réellement présents dans les tables.
+-- Cela corrige l'erreur "Duplicate key value violates unique constraint" (Erreur 500).
+
+-- 1. Table LIEU
+SELECT setval(pg_get_serial_sequence('lieu', 'id'), COALESCE((SELECT MAX(id) FROM lieu), 0) + 1, false);
+
+-- 2. Table VOITURE
+SELECT setval(pg_get_serial_sequence('voiture', 'id'), COALESCE((SELECT MAX(id) FROM voiture), 0) + 1, false);
+
+-- 3. Table RESERVATION
+SELECT setval(pg_get_serial_sequence('reservation', 'id'), COALESCE((SELECT MAX(id) FROM reservation), 0) + 1, false);
+
+-- 4. Table DISTANCE
+SELECT setval(pg_get_serial_sequence('distance', 'id'), COALESCE((SELECT MAX(id) FROM distance), 0) + 1, false);
+
+-- 5. Table API_TOKEN
+SELECT setval(pg_get_serial_sequence('api_token', 'id'), COALESCE((SELECT MAX(id) FROM api_token), 0) + 1, false);
