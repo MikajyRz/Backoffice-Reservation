@@ -48,7 +48,30 @@ body {
   border-radius: 10px;
 }
 .nav-link:hover {
-  background: rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.1);
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.25em 0.4em;
+  font-size: 75%;
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
+  white-space: nowrap;
+  vertical-align: baseline;
+  border-radius: 0.25rem;
+  background-color: #6c757d;
+  color: white;
+}
+
+.badge-info {
+  background-color: #17a2b8;
+}
+
+.error-text {
+  color: #dc3545;
+  font-weight: bold;
 }
 .container {
   max-width: 1100px;

@@ -9,6 +9,7 @@ import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -142,8 +143,12 @@ public class ReservationController {
 
         // Étape 1.4 : Assigner véhicules par lieu
         List<Map<String, Object>> assigned = new ArrayList<>();
-        List<Integer> unassigned = new ArrayList<>();
+        List<ReservationRow> unassigned = new ArrayList<>();
         List<VoitureRow> availableVehicles = new ArrayList<>(vehicles);
+
+        // On récupère d'abord les véhicules déjà assignés pour cette date (pour l'affichage complet)
+        // Mais attention : ici on planifie les NON assignés. 
+        // Si on veut afficher TOUT, il faut fusionner après.
 
         try (Connection con = DbUtil.getConnection()) {
             con.setAutoCommit(false);
@@ -151,17 +156,52 @@ public class ReservationController {
                 for (Map.Entry<Integer, List<ReservationRow>> entry : reservationsByLieu.entrySet()) {
                     int lieuId = entry.getKey();
                     List<ReservationRow> resList = entry.getValue();
-                    int totalPassengers = resList.stream().mapToInt(ReservationRow::getNombre_passager).sum();
+                    List<ReservationRow> pending = new ArrayList<>(resList);
 
-                    // Trouver meilleur véhicule
-                    VoitureRow bestVehicle = findBestVehicle(availableVehicles, totalPassengers);
-                    if (bestVehicle != null) {
-                        // Assigner et calculer horaires
-                        for (ReservationRow res : resList) {
+                    while (!pending.isEmpty() && !availableVehicles.isEmpty()) {
+                        int needed = pending.stream().mapToInt(ReservationRow::getNombre_passager).sum();
+
+                        // 1. Essayer de trouver un véhicule pour TOUT le monde
+                        VoitureRow bestVehicle = findBestVehicle(availableVehicles, needed);
+
+                        // 2. Si pas trouvé, prendre le plus grand disponible pour en prendre une partie
+                        if (bestVehicle == null) {
+                             bestVehicle = availableVehicles.stream()
+                                    .max(Comparator.comparingInt(VoitureRow::getNb_place))
+                                    .orElse(null);
+                        }
+
+                        if (bestVehicle == null) break; // Plus de véhicules disponibles
+
+                        // 3. Remplir ce véhicule (Greedy)
+                        List<ReservationRow> assignedToThis = new ArrayList<>();
+                        int currentLoad = 0;
+                        int capacity = bestVehicle.getNb_place();
+
+                        Iterator<ReservationRow> it = pending.iterator();
+                        while (it.hasNext()) {
+                            ReservationRow res = it.next();
+                            if (currentLoad + res.getNombre_passager() <= capacity) {
+                                assignedToThis.add(res);
+                                currentLoad += res.getNombre_passager();
+                                it.remove();
+                            }
+                        }
+
+                        if (assignedToThis.isEmpty()) {
+                            break; 
+                        }
+
+                        // Assigner et calculer horaires pour ce lot
+                        availableVehicles.remove(bestVehicle);
+
+                        for (ReservationRow res : assignedToThis) {
                             Map<String, Object> trip = new HashMap<>();
                             trip.put("vehicule", bestVehicle.getImmatricule());
+                            trip.put("vehiculeDetails", bestVehicle); // Ajout détails véhicule
                             trip.put("reservationId", res.getId());
                             trip.put("lieu", res.getLieu_nom());
+                            trip.put("nbPassagers", res.getNombre_passager()); // Ajout nb passagers
                             trip.put("dateDepart", res.getDate_heure_arrive());
                             String arrivee = calculateArrival(res, bestVehicle, lieuId);
                             trip.put("dateArrivee", arrivee);
@@ -175,9 +215,11 @@ public class ReservationController {
                                 ps.executeUpdate();
                             }
                         }
-                        availableVehicles.remove(bestVehicle);
-                    } else {
-                        unassigned.addAll(resList.stream().map(ReservationRow::getId).collect(Collectors.toList()));
+                    }
+
+                    // Ce qui reste dans pending n'a pas été assigné
+                    if (!pending.isEmpty()) {
+                        unassigned.addAll(pending);
                     }
                 }
                 con.commit();
@@ -189,9 +231,11 @@ public class ReservationController {
             throw new RuntimeException(e);
         }
 
+        // Ajouter les véhicules non utilisés à la réponse pour info
         Map<String, Object> result = new HashMap<>();
         result.put("assigned", assigned);
         result.put("unassigned", unassigned);
+        result.put("unusedVehicles", availableVehicles); // Véhicules restants sans mission
         return result;
     }
 
