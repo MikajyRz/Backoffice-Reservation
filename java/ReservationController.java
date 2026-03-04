@@ -130,6 +130,44 @@ public class ReservationController {
     }
 
     @Api
+    @GetMapping("/api/plan-date")
+    public Map<String, Object> getPlanDate(@Param("date") String dateStr) {
+        // Étape 1.1 : Parser la date
+        LocalDate date = LocalDate.parse(dateStr);
+
+        // Étape 1.2 : Récupérer les véhicules
+        List<VoitureRow> vehicles = listAllVehicles();
+
+        // Étape 1.3 : Récupérer les réservations DÉJÀ assignées
+        List<Map<String, Object>> assigned = getAssignedReservationsForDate(date, vehicles);
+        
+        // Étape 1.4 : Récupérer les réservations NON assignées (pour affichage)
+        Map<Integer, List<ReservationRow>> reservationsByLieu = getReservationsByLieuForDate(date);
+        List<ReservationRow> unassigned = new ArrayList<>();
+        for (List<ReservationRow> list : reservationsByLieu.values()) {
+            unassigned.addAll(list);
+        }
+
+        // Étape 1.5 : Calculer les véhicules non utilisés
+        List<VoitureRow> unusedVehicles = new ArrayList<>(vehicles);
+        if (!assigned.isEmpty()) {
+            for (Map<String, Object> trip : assigned) {
+                VoitureRow vDetails = (VoitureRow) trip.get("vehiculeDetails");
+                if (vDetails != null) {
+                    unusedVehicles.removeIf(v -> v.getId() == vDetails.getId());
+                }
+            }
+        }
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("assigned", assigned);
+        result.put("unassigned", unassigned);
+        result.put("unusedVehicles", unusedVehicles);
+        
+        return result;
+    }
+
+    @Api
     @PostMapping("/api/plan-date")
     public Map<String, Object> planDate(@Param("date") String dateStr) {
         // Étape 1.1 : Parser la date
