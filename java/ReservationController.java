@@ -177,9 +177,11 @@ public class ReservationController {
         List<VoitureRow> availableVehicles = new ArrayList<>(vehicles);
 
         // Étape 1.4 : Récupérer les réservations DÉJÀ assignées pour cette date
+        // Init lists
         List<Map<String, Object>> assigned = new ArrayList<>();
         List<ReservationRow> unassigned = new ArrayList<>();
-        
+
+        // -- NOUVELLE LOGIQUE : Récupérer les réservations DÉJÀ assignées pour cette date --
         List<Map<String, Object>> alreadyAssigned = getAssignedReservationsForDate(date, vehicles);
         if (!alreadyAssigned.isEmpty()) {
             assigned.addAll(alreadyAssigned);
@@ -192,6 +194,7 @@ public class ReservationController {
                 }
             }
         }
+        // ----------------------------------------------------------------------------------
 
         try (Connection con = DbUtil.getConnection()) {
             con.setAutoCommit(false);
@@ -207,11 +210,11 @@ public class ReservationController {
 
                         Map<String, Object> trip = new HashMap<>();
                         trip.put("vehicule", bestVehicle.getImmatricule());
-                        trip.put("vehiculeDetails", bestVehicle);
+                        trip.put("vehiculeDetails", bestVehicle); // Ajout détails véhicule
                         trip.put("reservationId", res.getId());
-                        trip.put("clientId", res.getId_client());
+                        trip.put("clientId", res.getId_client()); // Ajout ID Client
                         trip.put("lieu", res.getLieu_nom());
-                        trip.put("nbPassagers", res.getNombre_passager());
+                        trip.put("nbPassagers", res.getNombre_passager()); // Ajout nb passagers
                         trip.put("dateDepart", res.getDate_heure_arrive());
                         String arrivee = calculateArrival(res, bestVehicle, res.getId_lieu());
                         trip.put("dateArrivee", arrivee);
@@ -246,7 +249,6 @@ public class ReservationController {
         return result;
     }
 
-    private List<ReservationRow> getUnassignedReservationsForDate(LocalDate date) {
         List<ReservationRow> list = new ArrayList<>();
         String sql = "SELECT r.id, r.id_client, r.nombre_passager, r.date_heure_arrive, r.id_lieu, l.libelle AS lieu_nom "
                 + "FROM reservation r JOIN lieu l ON l.id = r.id_lieu "
@@ -256,21 +258,7 @@ public class ReservationController {
         try (Connection con = DbUtil.getConnection();
              PreparedStatement ps = con.prepareStatement(sql)) {
             ps.setDate(1, java.sql.Date.valueOf(date));
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    int id = rs.getInt("id");
-                    String idClient = rs.getString("id_client");
-                    int nb = rs.getInt("nombre_passager");
-                    String dateHeure = rs.getTimestamp("date_heure_arrive").toLocalDateTime().toString();
-                    int idLieu = rs.getInt("id_lieu");
-                    String lieuNom = rs.getString("lieu_nom");
-
-                    list.add(new ReservationRow(id, idClient, nb, dateHeure, idLieu, lieuNom));
-                }
-            }
         } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
         return list;
     }
 
