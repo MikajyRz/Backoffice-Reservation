@@ -8,17 +8,16 @@ DELETE FROM parametre;
 -- 1. Insertion des Paramètres (Vitesse, Temps attente)
 INSERT INTO parametre (vitesse_moyenne, temps_attente) VALUES (60, 30);
 
--- 2. Insertion des Lieux
--- Lieu 1 : Aeroport (Destination)
-INSERT INTO lieu (id, code, libelle) VALUES (1, 'TNR', 'Ivato Aeroport');
--- Lieu 2 : Hotel Carlton (Point de départ exemple)
-INSERT INTO lieu (id, code, libelle) VALUES (2, 'HOT1', 'Hotel Carlton');
+-- Création des lieux avec IDs connus
+INSERT INTO lieu(id, code, libelle) VALUES (1, 'TNR', 'Ivato Aeroport');
+INSERT INTO lieu(id, code, libelle) VALUES (2, 'HOT1', 'Hotel Carlton');
+INSERT INTO lieu(id, code, libelle) VALUES (3, 'HOT2', 'Hotel Lokanga');
+INSERT INTO lieu(id, code, libelle) VALUES (4, 'HOT3', 'Hotel Ibis');
+INSERT INTO lieu(id, code, libelle) VALUES (5, 'HOT4', 'Hotel Lokanga');
 
 -- 3. Insertion des Distances
 -- Distance entre Hotel Carlton (2) et Aeroport (1) = 15 km
 INSERT INTO distance (from_lieu, to_lieu, kilometer) VALUES (2, 1, 15);
--- Distance inverse (au cas où)
-INSERT INTO distance (from_lieu, to_lieu, kilometer) VALUES (1, 2, 15);
 
 -- 4. Insertion des Voitures (V1, V2, V3)
 -- V1 : 4 places, Essence
