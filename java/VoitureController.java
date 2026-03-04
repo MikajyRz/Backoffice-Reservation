@@ -51,7 +51,13 @@ public class VoitureController {
             ps.setInt(3, nbPlace);
             ps.executeUpdate();
         } catch (Exception e) {
-            throw new RuntimeException(e);
+            // En cas d'erreur, on retourne au formulaire avec le message
+            ModelView mv = new ModelView();
+            mv.setView("voitureForm.jsp");
+            mv.addData("error", "Erreur lors de la création : " + e.getMessage());
+            // On remet les valeurs saisies
+            mv.addData("voiture", new VoitureRow(0, immatricule, typeCarburant, nbPlace));
+            return mv;
         }
 
         ModelView mv = new ModelView();
