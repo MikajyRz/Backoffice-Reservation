@@ -176,7 +176,6 @@ public class ReservationController {
         List<VoitureRow> vehicles = listAllVehicles();
         List<VoitureRow> availableVehicles = new ArrayList<>(vehicles);
 
-        // Étape 1.4 : Récupérer les réservations DÉJÀ assignées pour cette date
         // Init lists
         List<Map<String, Object>> assigned = new ArrayList<>();
         List<ReservationRow> unassigned = new ArrayList<>();
@@ -249,19 +248,6 @@ public class ReservationController {
         return result;
     }
 
-        List<ReservationRow> list = new ArrayList<>();
-        String sql = "SELECT r.id, r.id_client, r.nombre_passager, r.date_heure_arrive, r.id_lieu, l.libelle AS lieu_nom "
-                + "FROM reservation r JOIN lieu l ON l.id = r.id_lieu "
-                + "WHERE DATE(r.date_heure_arrive) = ? AND r.id_voiture IS NULL "
-                + "ORDER BY r.id ASC"; // Ordre de création (FIFO)
-
-        try (Connection con = DbUtil.getConnection();
-             PreparedStatement ps = con.prepareStatement(sql)) {
-            ps.setDate(1, java.sql.Date.valueOf(date));
-        } catch (Exception e) {
-        return list;
-    }
-
     private List<Map<String, Object>> getAssignedReservationsForDate(LocalDate date, List<VoitureRow> allVehicles) {
         List<Map<String, Object>> result = new ArrayList<>();
         String sql = "SELECT r.id, r.id_client, r.nombre_passager, r.date_heure_arrive, r.id_lieu, l.libelle AS lieu_nom, r.id_voiture "
@@ -308,6 +294,34 @@ public class ReservationController {
             throw new RuntimeException(e);
         }
         return result;
+    }
+
+    private List<ReservationRow> getUnassignedReservationsForDate(LocalDate date) {
+        List<ReservationRow> list = new ArrayList<>();
+        String sql = "SELECT r.id, r.id_client, r.nombre_passager, r.date_heure_arrive, r.id_lieu, l.libelle AS lieu_nom "
+                + "FROM reservation r JOIN lieu l ON l.id = r.id_lieu "
+                + "WHERE DATE(r.date_heure_arrive) = ? AND r.id_voiture IS NULL "
+                + "ORDER BY r.id ASC"; // Ordre de création (FIFO)
+
+        try (Connection con = DbUtil.getConnection();
+             PreparedStatement ps = con.prepareStatement(sql)) {
+            ps.setDate(1, java.sql.Date.valueOf(date));
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    int id = rs.getInt("id");
+                    String idClient = rs.getString("id_client");
+                    int nb = rs.getInt("nombre_passager");
+                    String dateHeure = rs.getTimestamp("date_heure_arrive").toLocalDateTime().toString();
+                    int idLieu = rs.getInt("id_lieu");
+                    String lieuNom = rs.getString("lieu_nom");
+
+                    list.add(new ReservationRow(id, idClient, nb, dateHeure, idLieu, lieuNom));
+                }
+            }
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        return list;
     }
 
     private static List<VoitureRow> listAllVehicles() {
