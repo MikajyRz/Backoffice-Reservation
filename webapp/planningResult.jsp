@@ -147,6 +147,7 @@
                         <th>Lieu</th>
                         <th>Départ</th>
                         <th>Arrivée</th>
+                        <th>Retour Aéroport</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -163,6 +164,7 @@
                             <td>${trip.lieu}</td>
                             <td>${trip.dateDepart}</td>
                             <td>${trip.dateArrivee}</td>
+                            <td>${trip.dateRetourAeroport}</td>
                         </tr>
                     </c:forEach>
                 </tbody>
@@ -229,7 +231,7 @@
     </c:if>
 
     <div class="form-actions" style="margin-top: 30px; text-align: center;">
-        <a class="link-btn" href="${pageContext.request.contextPath}/planning">Nouvelle planification</a>
+        <a class="link-btn" href="${pageContext.request.contextPath}/reservation/planning">Nouvelle planification</a>
         <a class="link-btn" style="background-color: #6b7280;" href="${pageContext.request.contextPath}/">Retour</a>
     </div>
 </div>
