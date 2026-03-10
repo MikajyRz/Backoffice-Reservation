@@ -44,3 +44,9 @@ SELECT setval(pg_get_serial_sequence('distance', 'id'), COALESCE((SELECT MAX(id)
 
 -- 5. Table API_TOKEN
 SELECT setval(pg_get_serial_sequence('api_token', 'id'), COALESCE((SELECT MAX(id) FROM api_token), 0) + 1, false);
+
+INSERT INTO api_token(token, date_expiration) 
+VALUES ('tok_valid_123', NOW() + INTERVAL '7 days');
+
+INSERT INTO api_token(token, date_expiration) 
+VALUES ('tok_expired_456', NOW() - INTERVAL '2 days');
