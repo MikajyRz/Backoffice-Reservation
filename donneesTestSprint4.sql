@@ -25,10 +25,21 @@
 
 
 -- ======================================================================
--- CAS 1 - Mutualisation (même date+heure) + minimisation nb véhicules
--- Date test: 2026-03-20
--- Attendu: 2 réservations sont mutualisées dans un véhicule (5+2=7)
+-- SCENARIO UNIQUE COMPLET (données plus complexes) - Assignation + ordre + disponibilité
+-- Date test: 2026-04-05
+-- Couvre:
+-- - Mutualisation (même date+heure)
+-- - Remplissage immédiat après ouverture d'un véhicule (greedy)
+-- - Tie-break carburant si même capacité (Diesel prioritaire)
+-- - Ordre de desserte: distance à l'aéroport puis alphabétique à égalité
+-- - Réutilisation véhicule si retour à l'aéroport <= créneau suivant
+-- - Réservation non assignable (trop de passagers)
+--
+-- Hypothèses temps:
+-- - vitesse_moyenne=60 km/h => 1 km = 1 min
+-- - le temps d'attente n'est pas inclus dans les calculs de trajet
 -- ======================================================================
+
 -- Nettoyage
 DELETE FROM reservation;
 DELETE FROM distance;
@@ -38,293 +49,126 @@ DELETE FROM parametre;
 
 INSERT INTO parametre (vitesse_moyenne, temps_attente) VALUES (60, 30);
 
-INSERT INTO lieu(id, code, libelle) VALUES
-(1, 'TNR', 'Ivato Aeroport'),
-(2, 'A', 'Hotel Alpha'),
-(3, 'B', 'Hotel Beta');
-
--- Distances (2 <-> 1 =10km, 3 <-> 1 =20km, 2 <-> 3 =15km)
-INSERT INTO distance(from_lieu, to_lieu, kilometer) VALUES
-(1,2,10),(2,1,10),
-(1,3,20),(3,1,20),
-(2,3,15),(3,2,15);
-
--- Véhicules
-INSERT INTO voiture(id, immatricule, type_carburant, nb_place) VALUES
-(1,'V1','E',4),
-(2,'V2','El',5),
-(3,'V3','H',6),
-(4,'V4','D',7);
-
--- Réservations même créneau 15:00
-INSERT INTO reservation(id, id_client, nombre_passager, date_heure_arrive, id_lieu, id_voiture) VALUES
-(101,'C101',5,'2026-03-20 15:00:00',3,NULL),
-(102,'C102',2,'2026-03-20 15:00:00',2,NULL),
-(103,'C103',2,'2026-03-20 15:00:00',3,NULL);
-
--- Résultats attendus (après Planifier sur 2026-03-20)
--- - (101, 102) -> V4 (7 places)
--- - (103)      -> V1 (4 places)
--- - Nb véhicules à 15:00 = 2
-
-
--- ======================================================================
--- CAS 2 - Priorité de traitement (tri décroissant nb personnes)
--- Date test: 2026-03-21
--- Attendu: la réservation 6p est placée en premier, ce qui influence la création des bins.
--- ======================================================================
--- Nettoyage
-DELETE FROM reservation;
-DELETE FROM distance;
-DELETE FROM voiture;
-DELETE FROM lieu;
-DELETE FROM parametre;
-
-INSERT INTO parametre (vitesse_moyenne, temps_attente) VALUES (60, 30);
-
-INSERT INTO lieu(id, code, libelle) VALUES
-(1, 'TNR', 'Ivato Aeroport'),
-(2, 'A', 'Hotel Alpha');
-
-INSERT INTO distance(from_lieu, to_lieu, kilometer) VALUES
-(1,2,10),(2,1,10);
-
--- Véhicules: 6 et 7 pour observer l'effet
-INSERT INTO voiture(id, immatricule, type_carburant, nb_place) VALUES
-(10,'V6','E',6),
-(11,'V7','D',7);
-
--- Même créneau: 6p, 1p, 1p
-INSERT INTO reservation(id, id_client, nombre_passager, date_heure_arrive, id_lieu, id_voiture) VALUES
-(201,'C201',1,'2026-03-21 10:00:00',2,NULL),
-(202,'C202',6,'2026-03-21 10:00:00',2,NULL),
-(203,'C203',1,'2026-03-21 10:00:00',2,NULL);
-
--- Résultats attendus
--- - La 6p (#202) doit ouvrir un bin en premier.
--- - Avec V6 (6 places): #202 prend V6, puis #201/#203 ne peuvent pas se mettre dans V6 (reste 0) => un 2ème véhicule nécessaire.
--- - Donc: #202 -> V6 ; (#201 + #203) -> V7
-
-
--- ======================================================================
--- CAS 3 - Réutilisation d'un véhicule sur un autre créneau (même date, heure différente)
--- Date test: 2026-03-22
--- Attendu: un même véhicule peut être utilisé à 09:00 puis à 10:00.
--- ======================================================================
--- Nettoyage
-DELETE FROM reservation;
-DELETE FROM distance;
-DELETE FROM voiture;
-DELETE FROM lieu;
-DELETE FROM parametre;
-
-INSERT INTO parametre (vitesse_moyenne, temps_attente) VALUES (60, 30);
-
-INSERT INTO lieu(id, code, libelle) VALUES
-(1, 'TNR', 'Ivato Aeroport'),
-(2, 'A', 'Hotel Alpha');
-
-INSERT INTO distance(from_lieu, to_lieu, kilometer) VALUES
-(1,2,10),(2,1,10);
-
-INSERT INTO voiture(id, immatricule, type_carburant, nb_place) VALUES
-(1,'V4','D',7);
-
-INSERT INTO reservation(id, id_client, nombre_passager, date_heure_arrive, id_lieu, id_voiture) VALUES
-(301,'C301',7,'2026-03-22 09:00:00',2,NULL),
-(302,'C302',7,'2026-03-22 10:00:00',2,NULL);
-
--- Résultats attendus
--- - #301 -> V4 à 09:00
--- - #302 -> non assignée (règle: 1 seul créneau par véhicule sur la journée)
-
-
--- ======================================================================
--- CAS 4 - Ordre de desserte: distance croissante, puis alphabétique si égalité
--- Date test: 2026-03-23
--- Attendu: à même distance, Beta avant Gamma (B < G)
--- ======================================================================
--- Nettoyage
-DELETE FROM reservation;
-DELETE FROM distance;
-DELETE FROM voiture;
-DELETE FROM lieu;
-DELETE FROM parametre;
-
-INSERT INTO parametre (vitesse_moyenne, temps_attente) VALUES (60, 30);
-
+-- Lieux (id=1 = aéroport)
 INSERT INTO lieu(id, code, libelle) VALUES
 (1, 'TNR', 'Ivato Aeroport'),
 (2, 'ALP', 'Hotel Alpha'),
 (3, 'BET', 'Hotel Beta'),
-(4, 'GAM', 'Hotel Gamma');
+(4, 'GAM', 'Hotel Gamma'),
+(5, 'DEL', 'Hotel Delta');
 
--- Alpha 10km, Beta 20km, Gamma 20km
+-- Distances depuis l'aéroport
+-- Alpha 8km, Beta 12km, Gamma 12km (égalité => tri alpha: Beta avant Gamma), Delta 25km
+-- + distances inter-lieux pour rendre les retours non triviaux
 INSERT INTO distance(from_lieu, to_lieu, kilometer) VALUES
-(1,2,10),(2,1,10),
-(1,3,20),(3,1,20),
-(1,4,20),(4,1,20),
-(2,3,15),(3,2,15),
-(2,4,15),(4,2,15),
-(3,4,5),(4,3,5);
+(1,2,8),(2,1,8),
+(1,3,12),(3,1,12),
+(1,4,12),(4,1,12),
+(1,5,25),(5,1,25),
+(2,3,6),(3,2,6),
+(2,4,7),(4,2,7),
+(2,5,18),(5,2,18),
+(3,4,4),(4,3,4),
+(3,5,16),(5,3,16),
+(4,5,15),(5,4,15);
 
+-- Véhicules
+-- 2 véhicules de 10 places (E vs D) pour tester tie-break Diesel uniquement à capacité égale
 INSERT INTO voiture(id, immatricule, type_carburant, nb_place) VALUES
-(1,'V7','D',7);
+(1,'V18-D','D',18),
+(2,'V10-E','E',10),
+(3,'V10-D','D',10),
+(4,'V7-D','D',7),
+(5,'V5-E','E',5);
 
--- On force mutualisation dans un seul véhicule
+-- ======================================================================
+-- Réservations sur la même date (2026-04-05), multi-créneaux
+-- ======================================================================
+
+-- CRENEAU 09:00
+-- But:
+-- - ouvrir V18-D avec 13p puis le remplir immédiatement avec 3p et 1p
+-- - ouvrir ensuite un 10 places et, à capacité égale, Diesel est choisi (V10-D)
+-- - mutualiser 6p+2p dans V10-D
 INSERT INTO reservation(id, id_client, nombre_passager, date_heure_arrive, id_lieu, id_voiture) VALUES
-(401,'C401',2,'2026-03-23 12:00:00',2,NULL),
-(402,'C402',2,'2026-03-23 12:00:00',4,NULL),
-(403,'C403',2,'2026-03-23 12:00:00',3,NULL);
+(901,'R901',13,'2026-04-05 09:00:00',5,NULL),
+(902,'R902', 6,'2026-04-05 09:00:00',2,NULL),
+(903,'R903', 3,'2026-04-05 09:00:00',3,NULL),
+(904,'R904', 1,'2026-04-05 09:00:00',4,NULL),
+(905,'R905', 2,'2026-04-05 09:00:00',2,NULL);
 
--- Résultats attendus (ordre affiché dans le planning)
--- - Ordre 1: Alpha (10km)
--- - Ordre 2: Beta  (20km)
--- - Ordre 3: Gamma (20km)  (car Beta < Gamma)
-
-
--- ======================================================================
--- CAS 5 - Intégrité réservation: un groupe reste dans un seul véhicule (pas de split)
--- Date test: 2026-03-24
--- Attendu: une réservation 8p reste non assignée si aucun véhicule >= 8.
--- ======================================================================
--- Nettoyage
-DELETE FROM reservation;
-DELETE FROM distance;
-DELETE FROM voiture;
-DELETE FROM lieu;
-DELETE FROM parametre;
-
-INSERT INTO parametre (vitesse_moyenne, temps_attente) VALUES (60, 30);
-
-INSERT INTO lieu(id, code, libelle) VALUES
-(1, 'TNR', 'Ivato Aeroport'),
-(2, 'A', 'Hotel Alpha');
-
-INSERT INTO distance(from_lieu, to_lieu, kilometer) VALUES
-(1,2,10),(2,1,10);
-
-INSERT INTO voiture(id, immatricule, type_carburant, nb_place) VALUES
-(1,'V4','D',7),
-(2,'V5','E',5);
-
+-- CRENEAU 09:15
+-- But:
+-- - V10-D revient à 09:16 => il n'est pas dispo à 09:15
+-- - on force la création d'un bin sur V7-D, puis remplissage avec 1p
 INSERT INTO reservation(id, id_client, nombre_passager, date_heure_arrive, id_lieu, id_voiture) VALUES
-(501,'C501',8,'2026-03-24 14:00:00',2,NULL),
-(502,'C502',5,'2026-03-24 14:00:00',2,NULL);
+(906,'R906', 5,'2026-04-05 09:15:00',2,NULL),
+(907,'R907', 1,'2026-04-05 09:15:00',3,NULL);
 
--- Résultats attendus
--- - #501 (8p) -> non assignée
--- - #502 (5p) -> V5 (5 places)
-
-
--- ======================================================================
--- CAS 6 - Persistance: toutes les réservations planifiées sont enregistrées (id_voiture non null)
--- Date test: 2026-03-25
--- Attendu: après planification, id_voiture != NULL pour toutes les réservations assignables.
--- ======================================================================
--- Nettoyage
-DELETE FROM reservation;
-DELETE FROM distance;
-DELETE FROM voiture;
-DELETE FROM lieu;
-DELETE FROM parametre;
-
-INSERT INTO parametre (vitesse_moyenne, temps_attente) VALUES (60, 30);
-
-INSERT INTO lieu(id, code, libelle) VALUES
-(1, 'TNR', 'Ivato Aeroport'),
-(2, 'A', 'Hotel Alpha');
-
-INSERT INTO distance(from_lieu, to_lieu, kilometer) VALUES
-(1,2,10),(2,1,10);
-
-INSERT INTO voiture(id, immatricule, type_carburant, nb_place) VALUES
-(1,'V4','D',7),
-(2,'V3','H',6);
-
+-- CRENEAU 09:30
+-- But:
+-- - V10-D est de nouveau disponible (retour 09:16 <= 09:30) => réutilisation
 INSERT INTO reservation(id, id_client, nombre_passager, date_heure_arrive, id_lieu, id_voiture) VALUES
-(601,'C601',6,'2026-03-25 08:00:00',2,NULL),
-(602,'C602',1,'2026-03-25 08:00:00',2,NULL);
+(908,'R908', 6,'2026-04-05 09:30:00',2,NULL);
 
--- Résultats attendus
--- - #601 + #602 -> V4 (7 places) (mutualisation)
--- - Requête de contrôle (après planifier):
---   SELECT COUNT(*) FROM reservation WHERE DATE(date_heure_arrive)='2026-03-25' AND id_voiture IS NULL;  => 0
-
-
--- ======================================================================
--- CAS 7 - Tie-break carburant UNIQUEMENT si égalité de capacité
--- Date test: 2026-03-26
--- Attendu: entre 2 véhicules de même capacité, Diesel est choisi.
--- ======================================================================
--- Nettoyage
-DELETE FROM reservation;
-DELETE FROM distance;
-DELETE FROM voiture;
-DELETE FROM lieu;
-DELETE FROM parametre;
-
-INSERT INTO parametre (vitesse_moyenne, temps_attente) VALUES (60, 30);
-
-INSERT INTO lieu(id, code, libelle) VALUES
-(1, 'TNR', 'Ivato Aeroport'),
-(2, 'A', 'Hotel Alpha');
-
-INSERT INTO distance(from_lieu, to_lieu, kilometer) VALUES
-(1,2,10),(2,1,10);
-
--- Deux véhicules 5 places, l'un Diesel
-INSERT INTO voiture(id, immatricule, type_carburant, nb_place) VALUES
-(10,'V5-E','E',5),
-(11,'V5-D','D',5);
-
+-- CRENEAU 10:00
+-- But:
+-- - une réservation non assignable (25p)
+-- - bin packing: ouvrir V18-D pour 9p puis le remplir avec 7p puis 2p (reste 0)
+-- - la dernière 2p part dans le plus petit véhicule possible (V5-E)
 INSERT INTO reservation(id, id_client, nombre_passager, date_heure_arrive, id_lieu, id_voiture) VALUES
-(701,'C701',5,'2026-03-26 09:00:00',2,NULL);
-
--- Résultats attendus
--- - #701 -> V5-D (car même capacité 5, Diesel prioritaire)
-
-
--- ======================================================================
--- CAS 8 - Règle JOURNÉE: 1 seul créneau par véhicule (y compris si déjà assigné en base)
--- Date test: 2026-03-27
--- But: vérifier qu'un véhicule déjà utilisé à 09:00 ne peut pas être repris à 11:00.
--- ======================================================================
--- Nettoyage
-DELETE FROM reservation;
-DELETE FROM distance;
-DELETE FROM voiture;
-DELETE FROM lieu;
-DELETE FROM parametre;
-
-INSERT INTO parametre (vitesse_moyenne, temps_attente) VALUES (60, 30);
-
-INSERT INTO lieu(id, code, libelle) VALUES
-(1, 'TNR', 'Ivato Aeroport'),
-(2, 'A', 'Hotel Alpha');
-
-INSERT INTO distance(from_lieu, to_lieu, kilometer) VALUES
-(1,2,10),(2,1,10);
-
-INSERT INTO voiture(id, immatricule, type_carburant, nb_place) VALUES
-(1,'V7-A','D',7),
-(2,'V7-B','E',7);
-
--- Déjà assigné en base: véhicule V7-A utilisé à 09:00
-INSERT INTO reservation(id, id_client, nombre_passager, date_heure_arrive, id_lieu, id_voiture) VALUES
-(801,'C801',7,'2026-03-27 09:00:00',2,1);
-
--- À planifier: créneau 11:00 (même journée)
-INSERT INTO reservation(id, id_client, nombre_passager, date_heure_arrive, id_lieu, id_voiture) VALUES
-(802,'C802',7,'2026-03-27 11:00:00',2,NULL);
-
--- Résultats attendus
--- - #801 reste sur V7-A (déjà assigné)
--- - #802 -> V7-B (V7-A doit être considéré indisponible sur le reste de la journée)
+(909,'R909',25,'2026-04-05 10:00:00',2,NULL),
+(910,'R910', 9,'2026-04-05 10:00:00',5,NULL),
+(911,'R911', 7,'2026-04-05 10:00:00',2,NULL),
+(912,'R912', 2,'2026-04-05 10:00:00',3,NULL),
+(913,'R913', 2,'2026-04-05 10:00:00',4,NULL);
 
 
 -- ======================================================================
--- IMPORTANT
--- Ce fichier contient plusieurs CAS successifs. Exécute UN SEUL CAS à la fois.
--- Si tu exécutes tout le fichier d'un coup, seul le dernier CAS restera en base.
+-- Résultats attendus (après Planifier sur 2026-04-05)
 -- ======================================================================
+-- AFFECTATIONS ATTENDUES (id_reservation -> véhicule)
+-- - 09:00
+--   - #901 (13) + #903 (3) + #904 (1) -> V18-D (id_voiture=1)
+--   - #902 (6) + #905 (2)           -> V10-D (id_voiture=3)  (tie-break vs V10-E)
+-- - 09:15
+--   - #906 (5) + #907 (1)           -> V7-D  (id_voiture=4)  (V10-D indispo car retour 09:16)
+-- - 09:30
+--   - #908 (6)                      -> V10-D (id_voiture=3)  (réutilisation)
+-- - 10:00
+--   - #909 (25)                     -> non assignée (id_voiture NULL)
+--   - #910 (9) + #911 (7) + #912 (2)-> V18-D (id_voiture=1)
+--   - #913 (2)                      -> V5-E  (id_voiture=5)
+--
+-- ORDRE DE DESSERTE (à vérifier dans l'affichage du planning)
+-- Règle: distance à l'aéroport croissante, puis alphabétique si égalité.
+-- Ex: pour le créneau 09:00 dans V18-D: Beta (12) avant Gamma (12).
+--
+-- DISPONIBILITE (retour à l'aéroport, sans temps d'attente)
+-- V10-D sur 09:00 avec 2 arrêts à Alpha:
+-- - Aéroport->Alpha: 8 min ; Alpha->Aéroport: 8 min => retour 09:16
+-- donc V10-D indispo à 09:15, mais dispo à 09:30.
+--
+-- QUERIES DE VERIFICATION (à exécuter après planification)
+-- 1) Voir toutes les lignes + véhicules
+-- SELECT r.id, r.id_client, r.nombre_passager, r.date_heure_arrive, l.libelle AS lieu,
+--        r.id_voiture, v.immatricule, v.nb_place, v.type_carburant
+-- FROM reservation r
+-- JOIN lieu l ON l.id = r.id_lieu
+-- LEFT JOIN voiture v ON v.id = r.id_voiture
+-- WHERE DATE(r.date_heure_arrive) = '2026-04-05'
+-- ORDER BY r.date_heure_arrive ASC, r.id ASC;
+--
+-- 2) Contrôle persistance: seul #909 doit rester NULL
+-- SELECT COUNT(*) AS nb_null
+-- FROM reservation
+-- WHERE DATE(date_heure_arrive)='2026-04-05'
+--   AND id_voiture IS NULL;
+-- Attendu: 1
+--
+-- 3) Contrôle par créneau
+-- SELECT date_heure_arrive, id_voiture, COUNT(*) AS nb_res, SUM(nombre_passager) AS pax
+-- FROM reservation
+-- WHERE DATE(date_heure_arrive)='2026-04-05'
+-- GROUP BY date_heure_arrive, id_voiture
+-- ORDER BY date_heure_arrive, id_voiture;
