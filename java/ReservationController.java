@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.HashSet;
+import java.util.Collections;
 import java.util.stream.Collectors;
 
 import com.annotations.Api;
@@ -200,9 +201,35 @@ public class ReservationController {
             bin.add(ar.toReservationRow());
         }
 
-        Set<Integer> usedVehicleIdsForDayPlanning = new HashSet<>();
-        for (Map<Integer, VehicleBin> m : binsBySlot.values()) {
-            usedVehicleIdsForDayPlanning.addAll(m.keySet());
+        // Disponibilité par véhicule : heure à laquelle il est de retour à l'aéroport (donc réutilisable)
+        Map<Integer, LocalDateTime> vehicleAvailableAt = new HashMap<>();
+        for (VoitureRow v : vehicles) {
+            vehicleAvailableAt.put(v.getId(), LocalDateTime.MIN);
+        }
+
+        // Initialiser la disponibilité à partir des réservations déjà assignées en base
+        // (on prend le retour à l'aéroport comme fin de mission)
+        if (!binsBySlot.isEmpty()) {
+            List<LocalDateTime> assignedSlots = new ArrayList<>(binsBySlot.keySet());
+            assignedSlots.sort(Comparator.naturalOrder());
+            for (LocalDateTime slot : assignedSlots) {
+                Map<Integer, VehicleBin> perVeh = binsBySlot.get(slot);
+                List<Integer> vehIds = new ArrayList<>(perVeh.keySet());
+                vehIds.sort(Comparator.naturalOrder());
+                for (Integer vehId : vehIds) {
+                    VehicleBin b = perVeh.get(vehId);
+                    if (b == null) continue;
+                    List<ReservationRow> ordered = new ArrayList<>(b.reservations);
+                    ordered.sort(Comparator
+                            .comparingInt((ReservationRow r) -> distanceFromAirportKm(r.getId_lieu()))
+                            .thenComparing(ReservationRow::getLieu_nom, Comparator.nullsLast(String::compareToIgnoreCase))
+                            .thenComparingInt(ReservationRow::getId));
+
+                    LocalDateTime returnAt = computeReturnToAirportDateTime(slot, ordered);
+                    LocalDateTime current = vehicleAvailableAt.getOrDefault(vehId, LocalDateTime.MIN);
+                    if (returnAt.isAfter(current)) vehicleAvailableAt.put(vehId, returnAt);
+                }
+            }
         }
 
         // 1.7 : Regrouper les réservations non assignées par créneau exact (même date et heure)
@@ -213,9 +240,11 @@ public class ReservationController {
         try (Connection con = DbUtil.getConnection()) {
             con.setAutoCommit(false);
             try {
-                for (Map.Entry<LocalDateTime, List<ReservationRow>> e : pendingBySlot.entrySet()) {
-                    LocalDateTime slot = e.getKey();
-                    List<ReservationRow> slotReservations = new ArrayList<>(e.getValue());
+                List<LocalDateTime> pendingSlots = new ArrayList<>(pendingBySlot.keySet());
+                pendingSlots.sort(Comparator.naturalOrder());
+
+                for (LocalDateTime slot : pendingSlots) {
+                    List<ReservationRow> slotReservations = new ArrayList<>(pendingBySlot.getOrDefault(slot, Collections.emptyList()));
 
                     // Priorité : ordre décroissant du nombre de personnes
                     slotReservations.sort(Comparator.comparingInt(ReservationRow::getNombre_passager).reversed()
@@ -223,7 +252,13 @@ public class ReservationController {
 
                     Map<Integer, VehicleBin> slotBins = binsBySlot.computeIfAbsent(slot, k -> new LinkedHashMap<>());
                     Set<Integer> usedVehicleIdsInSlot = new HashSet<>(slotBins.keySet());
-                    usedVehicleIdsInSlot.addAll(usedVehicleIdsForDayPlanning);
+
+                    // Interdire l'utilisation des véhicules dont la disponibilité est après ce créneau
+                    for (Map.Entry<Integer, LocalDateTime> av : vehicleAvailableAt.entrySet()) {
+                        if (av.getValue() != null && av.getValue().isAfter(slot)) {
+                            usedVehicleIdsInSlot.add(av.getKey());
+                        }
+                    }
 
                     // NB : un même véhicule peut être réutilisé sur un autre créneau => pas de liste globale "available"
                     for (int i = 0; i < slotReservations.size(); i++) {
@@ -246,10 +281,33 @@ public class ReservationController {
                         }
 
                         usedVehicleIdsInSlot.add(newVehicle.getId());
-                        usedVehicleIdsForDayPlanning.add(newVehicle.getId());
                         VehicleBin bin = new VehicleBin(newVehicle);
                         bin.add(res);
                         slotBins.put(newVehicle.getId(), bin);
+
+                        // Remplissage immédiat : on parcourt les réservations restantes du créneau
+                        // et on ajoute celles qui rentrent dans ce véhicule, avant d'ouvrir un autre véhicule.
+                        for (int j = i + 1; j < slotReservations.size(); ) {
+                            ReservationRow candidate = slotReservations.get(j);
+                            if (bin.remainingCapacity() >= candidate.getNombre_passager()) {
+                                bin.add(candidate);
+                                slotReservations.remove(j);
+                            } else {
+                                j++;
+                            }
+                        }
+                    }
+
+                    // Mettre à jour la disponibilité des véhicules utilisés dans ce créneau
+                    for (VehicleBin b : slotBins.values()) {
+                        List<ReservationRow> ordered = new ArrayList<>(b.reservations);
+                        ordered.sort(Comparator
+                                .comparingInt((ReservationRow r) -> distanceFromAirportKm(r.getId_lieu()))
+                                .thenComparing(ReservationRow::getLieu_nom, Comparator.nullsLast(String::compareToIgnoreCase))
+                                .thenComparingInt(ReservationRow::getId));
+                        LocalDateTime returnAt = computeReturnToAirportDateTime(slot, ordered);
+                        LocalDateTime current = vehicleAvailableAt.getOrDefault(b.vehicle.getId(), LocalDateTime.MIN);
+                        if (returnAt.isAfter(current)) vehicleAvailableAt.put(b.vehicle.getId(), returnAt);
                     }
 
                     // Persist pour ce créneau : mise à jour id_voiture
@@ -498,14 +556,13 @@ public class ReservationController {
     private static Map<Integer, String> computeSequentialArrivals(LocalDateTime depart, List<ReservationRow> orderedStops) {
         Map<Integer, String> result = new HashMap<>();
         LocalDateTime t = depart;
-        int attente = getAttente();
         double vitesse = getVitesse();
 
         int prevLieu = 1; // Aéroport
         for (ReservationRow stop : orderedStops) {
             int dist = getDistanceSmart(prevLieu, stop.getId_lieu());
             long minutes = Math.round(((double) dist / vitesse) * 60);
-            t = t.plusMinutes(minutes).plusMinutes(attente);
+            t = t.plusMinutes(minutes);
             result.put(stop.getId(), t.toString().replace("T", " "));
             prevLieu = stop.getId_lieu();
         }
@@ -513,23 +570,25 @@ public class ReservationController {
     }
 
     private static String computeReturnToAirport(LocalDateTime depart, List<ReservationRow> orderedStops) {
+        return computeReturnToAirportDateTime(depart, orderedStops).toString().replace("T", " ");
+    }
+
+    private static LocalDateTime computeReturnToAirportDateTime(LocalDateTime depart, List<ReservationRow> orderedStops) {
         LocalDateTime t = depart;
-        int attente = getAttente();
         double vitesse = getVitesse();
 
         int prevLieu = 1;
         for (ReservationRow stop : orderedStops) {
             int dist = getDistanceSmart(prevLieu, stop.getId_lieu());
             long minutes = Math.round(((double) dist / vitesse) * 60);
-            t = t.plusMinutes(minutes).plusMinutes(attente);
+            t = t.plusMinutes(minutes);
             prevLieu = stop.getId_lieu();
         }
 
         int distBack = getDistanceSmart(prevLieu, 1);
         long minutesBack = Math.round(((double) distBack / vitesse) * 60);
         t = t.plusMinutes(minutesBack);
-
-        return t.toString().replace("T", " ");
+        return t;
     }
 
     private static int getDistance(int from, int to) {
