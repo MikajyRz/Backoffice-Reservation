@@ -3,6 +3,3 @@ java -cp "webapp/WEB-INF/classes;webapp/WEB-INF/lib/*;..\Framework\lib\*" test.j
 
 Reinitialisation DB: 
 java -cp "webapp/WEB-INF/classes;webapp/WEB-INF/lib/*;..\Framework\lib\*" test.java.PopulateDataMain
-
-Donner moi des autres donnees de test complets en ajoutant tous les test de fonctionnalites complet 
-Merci, maintenant je veux que tu ne considere pas le temps d'attente sur le duree de trajet et le vehicule peuvent faire plusieurs trajet s'il est de retour a l'aeroport
