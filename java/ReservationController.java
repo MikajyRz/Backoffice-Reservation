@@ -3,6 +3,7 @@ package test.java;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.Statement;
 import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -10,6 +11,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -375,6 +377,13 @@ public class ReservationController {
             vehicleAvailableAt.put(v.getId(), LocalDateTime.MIN);
         }
 
+        // Compteur de trajets effectués par véhicule (Aéroport -> ... -> Aéroport)
+        // Tous les véhicules sont à l'aéroport à 00:00 avec 0 trajet.
+        Map<Integer, Integer> tripCountByVehicle = new HashMap<>();
+        for (VoitureRow v : vehicles) {
+            tripCountByVehicle.put(v.getId(), 0);
+        }
+
         // Initialiser la disponibilité à partir des réservations déjà assignées en base
         // (on prend le retour à l'aéroport comme fin de mission)
         // IMPORTANT: toutes les tournées de la même fenêtre partent au même departEffectif.
@@ -401,6 +410,9 @@ public class ReservationController {
                     LocalDateTime returnAt = computeReturnToAirportDateTime(departEffectif, ordered);
                     LocalDateTime current = vehicleAvailableAt.getOrDefault(vehId, LocalDateTime.MIN);
                     if (returnAt.isAfter(current)) vehicleAvailableAt.put(vehId, returnAt);
+
+                    // 1 tournée effectuée pour ce véhicule dans cette fenêtre
+                    tripCountByVehicle.put(vehId, tripCountByVehicle.getOrDefault(vehId, 0) + 1);
                 }
             }
         }
@@ -447,7 +459,7 @@ public class ReservationController {
                             remainingPassengers.add(slotReservations.get(j).getNombre_passager());
                         }
 
-                        VoitureRow newVehicle = findVehicleForNewBin(vehicles, usedVehicleIdsInSlot, res.getNombre_passager(), remainingPassengers);
+                        VoitureRow newVehicle = findVehicleForNewBin(vehicles, usedVehicleIdsInSlot, res.getNombre_passager(), remainingPassengers, tripCountByVehicle);
                         if (newVehicle == null) {
                             unassigned.add(res);
                             continue;
@@ -483,13 +495,88 @@ public class ReservationController {
                         if (returnAt.isAfter(current)) vehicleAvailableAt.put(b.vehicle.getId(), returnAt);
                     }
 
-                    // Persist pour ce créneau : mise à jour id_voiture
-                    for (VehicleBin bin : slotBins.values()) {
-                        for (ReservationRow r : bin.reservations) {
-                            if (r.getId() <= 0) continue;
+                    // Incrémenter le compteur de trajets (1 par véhicule réellement utilisé dans cette fenêtre)
+                    for (VehicleBin b : slotBins.values()) {
+                        if (b == null || b.vehicle == null) continue;
+                        if (b.reservations == null || b.reservations.isEmpty()) continue;
+                        int vehId = b.vehicle.getId();
+                        tripCountByVehicle.put(vehId, tripCountByVehicle.getOrDefault(vehId, 0) + 1);
+                    }
+
+                    // Persist pour ce créneau : création d'une tournée par véhicule réellement utilisé
+                    // + insertion des stops + liaison reservation.id_tournee
+                    LocalDateTime windowEnd = slot.plusMinutes(getAttente());
+                    for (VehicleBin b : slotBins.values()) {
+                        if (b == null || b.vehicle == null) continue;
+                        if (b.reservations == null || b.reservations.isEmpty()) continue;
+
+                        List<ReservationRow> ordered = new ArrayList<>(b.reservations);
+                        ordered.sort(Comparator
+                                .comparingInt((ReservationRow r) -> distanceFromAirportKm(r.getId_lieu()))
+                                .thenComparing(ReservationRow::getLieu_nom, Comparator.nullsLast(String::compareToIgnoreCase))
+                                .thenComparingInt(ReservationRow::getId));
+
+                        LocalDateTime retourAt = computeReturnToAirportDateTime(departEffectifFenetre, ordered);
+
+                        int nbTotal = 0;
+                        for (ReservationRow r : b.reservations) nbTotal += r.getNombre_passager();
+
+                        int tourneeId;
+                        try (PreparedStatement ps = con.prepareStatement(
+                                "INSERT INTO tournee(id_voiture, window_start, window_end, depart_effectif, retour_aeroport, nb_passagers_total) "
+                                        + "VALUES (?, ?, ?, ?, ?, ?)",
+                                Statement.RETURN_GENERATED_KEYS)) {
+                            ps.setInt(1, b.vehicle.getId());
+                            ps.setTimestamp(2, Timestamp.valueOf(slot));
+                            ps.setTimestamp(3, Timestamp.valueOf(windowEnd));
+                            ps.setTimestamp(4, Timestamp.valueOf(departEffectifFenetre));
+                            ps.setTimestamp(5, Timestamp.valueOf(retourAt));
+                            ps.setInt(6, nbTotal);
+                            ps.executeUpdate();
+
+                            try (ResultSet keys = ps.getGeneratedKeys()) {
+                                if (!keys.next()) throw new RuntimeException("Impossible de récupérer l'id de la tournée insérée");
+                                tourneeId = keys.getInt(1);
+                            }
+                        }
+
+                        // Construire la liste des stops uniques par lieu, dans l'ordre de desserte.
+                        // Plusieurs réservations peuvent partager le même lieu => un seul stop.
+                        Map<Integer, LocalDateTime> arrivalByLieu = new LinkedHashMap<>();
+                        LocalDateTime t = departEffectifFenetre;
+                        double vitesse = getVitesse();
+                        int prevLieu = 1;
+                        for (ReservationRow stop : ordered) {
+                            int lieuId = stop.getId_lieu();
+                            if (arrivalByLieu.containsKey(lieuId)) continue;
+                            int dist = getDistanceSmart(prevLieu, lieuId);
+                            long minutes = Math.round(((double) dist / vitesse) * 60);
+                            t = t.plusMinutes(minutes);
+                            arrivalByLieu.put(lieuId, t);
+                            prevLieu = lieuId;
+                        }
+
+                        int ordre = 1;
+                        for (Map.Entry<Integer, LocalDateTime> e : arrivalByLieu.entrySet()) {
                             try (PreparedStatement ps = con.prepareStatement(
-                                    "UPDATE reservation SET id_voiture = ? WHERE id = ?")) {
-                                ps.setInt(1, bin.vehicle.getId());
+                                    "INSERT INTO tournee_stop(id_tournee, ordre, id_lieu, heure_arrivee) VALUES (?, ?, ?, ?)")) {
+                                ps.setInt(1, tourneeId);
+                                ps.setInt(2, ordre);
+                                ps.setInt(3, e.getKey());
+                                ps.setTimestamp(4, Timestamp.valueOf(e.getValue()));
+                                ps.executeUpdate();
+                            }
+                            ordre++;
+                        }
+
+                        // Lier les réservations à la tournée
+                        for (ReservationRow r : b.reservations) {
+                            if (r == null || r.getId() <= 0) continue;
+                            try (PreparedStatement ps = con.prepareStatement(
+                                    "UPDATE reservation "
+                                            + "SET id_tournee = COALESCE(id_tournee, ?) "
+                                            + "WHERE id = ?")) {
+                                ps.setInt(1, tourneeId);
                                 ps.setInt(2, r.getId());
                                 ps.executeUpdate();
                             }
@@ -531,60 +618,55 @@ public class ReservationController {
         Map<Integer, VoitureRow> vehicleById = allVehicles.stream()
                 .collect(Collectors.toMap(VoitureRow::getId, v -> v));
 
-        List<AssignedReservation> assignedRows = getAssignedReservationRowsForDate(date);
-
-        // Reconstruire les fenêtres globalement (tous véhicules), puis afficher un dateDepart commun
-        // à tous les bins de la fenêtre.
+        // Lecture directe depuis la nouvelle persistance (tournee + tournee_stop)
         List<Map<String, Object>> result = new ArrayList<>();
+        String sql = "SELECT "
+                + "r.id AS reservation_id, r.id_client, r.nombre_passager, r.id_lieu, l.libelle AS lieu_nom, "
+                + "t.id AS tournee_id, t.id_voiture, t.depart_effectif, t.retour_aeroport, "
+                + "ts.ordre AS ordre_desserte, ts.heure_arrivee "
+                + "FROM reservation r "
+                + "JOIN tournee t ON t.id = r.id_tournee "
+                + "JOIN lieu l ON l.id = r.id_lieu "
+                + "LEFT JOIN tournee_stop ts ON ts.id_tournee = t.id AND ts.id_lieu = r.id_lieu "
+                + "WHERE DATE(r.date_heure_arrive) = ? AND r.id_tournee IS NOT NULL";
 
-        List<AssignedWindow> windows = buildAssignedWindows(assignedRows);
-        for (AssignedWindow w : windows) {
-            LocalDateTime departEffectifFenetre = computeEffectiveDepartFromAssignedRows(w.windowStart, w.rows);
+        try (Connection con = DbUtil.getConnection();
+             PreparedStatement ps = con.prepareStatement(sql)) {
+            ps.setDate(1, java.sql.Date.valueOf(date));
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    int vehicleId = rs.getInt("id_voiture");
+                    VoitureRow vehicle = vehicleById.get(vehicleId);
+                    if (vehicle == null) continue;
 
-            Map<Integer, List<ReservationRow>> perVehicle = new HashMap<>();
-            for (AssignedReservation ar : w.rows) {
-                if (!vehicleById.containsKey(ar.idVoiture)) continue;
-                perVehicle.computeIfAbsent(ar.idVoiture, k -> new ArrayList<>()).add(ar.toReservationRow());
-            }
+                    Timestamp departTs = rs.getTimestamp("depart_effectif");
+                    Timestamp retourTs = rs.getTimestamp("retour_aeroport");
+                    Timestamp arriveeTs = rs.getTimestamp("heure_arrivee");
 
-            List<Integer> vehicleIds = new ArrayList<>(perVehicle.keySet());
-            vehicleIds.sort(Comparator.naturalOrder());
-            for (Integer vehicleId : vehicleIds) {
-                VoitureRow vehicle = vehicleById.get(vehicleId);
-                if (vehicle == null) continue;
-
-                List<ReservationRow> reservations = new ArrayList<>(perVehicle.getOrDefault(vehicleId, Collections.emptyList()));
-                reservations.sort(Comparator
-                        .comparingInt((ReservationRow r) -> distanceFromAirportKm(r.getId_lieu()))
-                        .thenComparing(ReservationRow::getLieu_nom, Comparator.nullsLast(String::compareToIgnoreCase))
-                        .thenComparingInt(ReservationRow::getId));
-
-                Map<Integer, String> arrivalByReservationId = computeSequentialArrivals(departEffectifFenetre, reservations);
-                String retourAeroport = computeReturnToAirport(departEffectifFenetre, reservations);
-
-                int ordre = 1;
-                for (ReservationRow res : reservations) {
                     Map<String, Object> trip = new HashMap<>();
                     trip.put("vehicule", vehicle.getImmatricule());
                     trip.put("vehiculeDetails", vehicle);
-                    trip.put("reservationId", res.getId());
-                    trip.put("clientId", res.getId_client());
-                    trip.put("lieu", res.getLieu_nom());
-                    trip.put("nbPassagers", res.getNombre_passager());
-                    trip.put("dateDepart", departEffectifFenetre.toString().replace("T", " "));
-                    trip.put("dateArrivee", arrivalByReservationId.get(res.getId()));
-                    trip.put("dateRetourAeroport", retourAeroport);
-                    trip.put("ordreDesserte", ordre);
+                    trip.put("reservationId", rs.getInt("reservation_id"));
+                    trip.put("clientId", rs.getString("id_client"));
+                    trip.put("lieu", rs.getString("lieu_nom"));
+                    trip.put("nbPassagers", rs.getInt("nombre_passager"));
+                    trip.put("dateDepart", departTs != null ? departTs.toLocalDateTime().toString().replace("T", " ") : null);
+                    trip.put("dateArrivee", arriveeTs != null ? arriveeTs.toLocalDateTime().toString().replace("T", " ") : null);
+                    trip.put("dateRetourAeroport", retourTs != null ? retourTs.toLocalDateTime().toString().replace("T", " ") : null);
+                    trip.put("ordreDesserte", rs.getObject("ordre_desserte") != null ? rs.getInt("ordre_desserte") : 9999);
+                    trip.put("tourneeId", rs.getInt("tournee_id"));
                     result.add(trip);
-                    ordre++;
                 }
             }
+        } catch (Exception e) {
+            throw new RuntimeException(e);
         }
 
-        // ordre global stable: départ effectif asc, puis véhicule id, puis ordre desserte
+        // ordre global stable: départ effectif asc, puis véhicule id, puis tournée id, puis ordre desserte
         result.sort(Comparator
-                .comparing((Map<String, Object> m) -> (String) m.get("dateDepart"))
+                .comparing((Map<String, Object> m) -> (String) m.get("dateDepart"), Comparator.nullsLast(String::compareTo))
                 .thenComparing(m -> ((VoitureRow) m.get("vehiculeDetails")).getId())
+                .thenComparing(m -> (Integer) m.get("tourneeId"))
                 .thenComparing(m -> (Integer) m.get("ordreDesserte"))
                 .thenComparing(m -> (Integer) m.get("reservationId")));
 
@@ -593,9 +675,11 @@ public class ReservationController {
 
     private List<AssignedReservation> getAssignedReservationRowsForDate(LocalDate date) {
         List<AssignedReservation> list = new ArrayList<>();
-        String sql = "SELECT r.id, r.id_client, r.nombre_passager, r.date_heure_arrive, r.id_lieu, l.libelle AS lieu_nom, r.id_voiture "
-                + "FROM reservation r JOIN lieu l ON l.id = r.id_lieu "
-                + "WHERE DATE(r.date_heure_arrive) = ? AND r.id_voiture IS NOT NULL";
+        String sql = "SELECT r.id, r.id_client, r.nombre_passager, r.date_heure_arrive, r.id_lieu, l.libelle AS lieu_nom, t.id_voiture "
+                + "FROM reservation r "
+                + "JOIN tournee t ON t.id = r.id_tournee "
+                + "JOIN lieu l ON l.id = r.id_lieu "
+                + "WHERE DATE(r.date_heure_arrive) = ? AND r.id_tournee IS NOT NULL";
 
         try (Connection con = DbUtil.getConnection();
              PreparedStatement ps = con.prepareStatement(sql)) {
@@ -623,7 +707,7 @@ public class ReservationController {
         List<ReservationRow> list = new ArrayList<>();
         String sql = "SELECT r.id, r.id_client, r.nombre_passager, r.date_heure_arrive, r.id_lieu, l.libelle AS lieu_nom "
                 + "FROM reservation r JOIN lieu l ON l.id = r.id_lieu "
-                + "WHERE DATE(r.date_heure_arrive) = ? AND r.id_voiture IS NULL "
+                + "WHERE DATE(r.date_heure_arrive) = ? AND r.id_tournee IS NULL "
                 + "ORDER BY r.id ASC"; // Ordre de création (FIFO)
 
         try (Connection con = DbUtil.getConnection();
@@ -686,7 +770,7 @@ public class ReservationController {
         return best;
     }
 
-    private static VoitureRow findVehicleForNewBin(List<VoitureRow> allVehicles, Set<Integer> usedVehicleIdsInSlot, int passengers, List<Integer> remainingPassengers) {
+    private static VoitureRow findVehicleForNewBin(List<VoitureRow> allVehicles, Set<Integer> usedVehicleIdsInSlot, int passengers, List<Integer> remainingPassengers, Map<Integer, Integer> tripCountByVehicle) {
         List<VoitureRow> candidates = allVehicles.stream()
                 .filter(v -> !usedVehicleIdsInSlot.contains(v.getId()))
                 .filter(v -> v.getNb_place() >= passengers)
@@ -713,8 +797,27 @@ public class ReservationController {
 
         List<VoitureRow> pool = mergeFriendly.isEmpty() ? candidates : mergeFriendly;
 
-        VoitureRow chosen = pool.stream()
-                .min(Comparator.comparingInt(VoitureRow::getNb_place)
+        int minTrips = Integer.MAX_VALUE;
+        for (VoitureRow v : pool) {
+            int tc = tripCountByVehicle != null ? tripCountByVehicle.getOrDefault(v.getId(), 0) : 0;
+            if (tc < minTrips) minTrips = tc;
+        }
+
+        final int minTripsFinal = minTrips;
+
+        List<VoitureRow> minTripPool = pool.stream()
+                .filter(v -> {
+                    int tc = tripCountByVehicle != null ? tripCountByVehicle.getOrDefault(v.getId(), 0) : 0;
+                    return tc == minTripsFinal;
+                })
+                .collect(Collectors.toList());
+
+        List<VoitureRow> finalPool = minTripPool.isEmpty() ? pool : minTripPool;
+
+        VoitureRow chosen = finalPool.stream()
+                .min(Comparator
+                        .comparingInt((VoitureRow v) -> tripCountByVehicle != null ? tripCountByVehicle.getOrDefault(v.getId(), 0) : 0)
+                        .thenComparingInt(VoitureRow::getNb_place)
                         .thenComparing((VoitureRow v) -> {
                             String carb = v.getType_carburant() != null ? v.getType_carburant().trim() : "";
                             return "D".equalsIgnoreCase(carb) ? 0 : 1;
@@ -820,6 +923,117 @@ public class ReservationController {
     public ModelView planning() {
         ModelView mv = new ModelView();
         mv.setView("planning.jsp");
+        return mv;
+    }
+
+    @GetMapping("/reservation/historique-trajets")
+    public ModelView historiqueTrajets(@Param("date") String dateStr) {
+        LocalDate date;
+        if (dateStr != null && !dateStr.trim().isEmpty()) {
+            date = LocalDate.parse(dateStr.trim());
+        } else {
+            date = LocalDate.now();
+        }
+
+        List<Map<String, Object>> trajets = new ArrayList<>();
+
+        String sql = "SELECT "
+                + "t.id AS tournee_id, t.window_start, t.window_end, t.depart_effectif, t.retour_aeroport, t.nb_passagers_total, "
+                + "v.immatricule AS vehicule, "
+                + "r.id AS reservation_id, "
+                + "ts.ordre AS stop_ordre, l.libelle AS stop_lieu, ts.heure_arrivee AS stop_arrivee "
+                + "FROM tournee t "
+                + "JOIN voiture v ON v.id = t.id_voiture "
+                + "LEFT JOIN reservation r ON r.id_tournee = t.id "
+                + "LEFT JOIN tournee_stop ts ON ts.id_tournee = t.id "
+                + "LEFT JOIN lieu l ON l.id = ts.id_lieu "
+                + "WHERE DATE(t.window_start) = ? "
+                + "ORDER BY t.depart_effectif ASC, t.id ASC, r.id ASC, ts.ordre ASC";
+
+        try (Connection con = DbUtil.getConnection();
+             PreparedStatement ps = con.prepareStatement(sql)) {
+            ps.setDate(1, java.sql.Date.valueOf(date));
+            try (ResultSet rs = ps.executeQuery()) {
+                Map<Integer, Map<String, Object>> byTournee = new LinkedHashMap<>();
+                Map<Integer, List<Map<String, Object>>> stopsByTournee = new HashMap<>();
+                Map<Integer, Set<String>> stopKeysByTournee = new HashMap<>();
+                Map<Integer, Set<Integer>> reservationIdsByTournee = new HashMap<>();
+
+                while (rs.next()) {
+                    int tourneeId = rs.getInt("tournee_id");
+
+                    Map<String, Object> row = byTournee.get(tourneeId);
+                    if (row == null) {
+                        row = new HashMap<>();
+                        row.put("tourneeId", tourneeId);
+                        row.put("vehicule", rs.getString("vehicule"));
+
+                        Timestamp ws = rs.getTimestamp("window_start");
+                        Timestamp we = rs.getTimestamp("window_end");
+                        Timestamp dep = rs.getTimestamp("depart_effectif");
+                        Timestamp ret = rs.getTimestamp("retour_aeroport");
+
+                        row.put("windowStart", ws != null ? ws.toLocalDateTime().toString().replace("T", " ") : null);
+                        row.put("windowEnd", we != null ? we.toLocalDateTime().toString().replace("T", " ") : null);
+                        row.put("departEffectif", dep != null ? dep.toLocalDateTime().toString().replace("T", " ") : null);
+                        row.put("retourAeroport", ret != null ? ret.toLocalDateTime().toString().replace("T", " ") : null);
+                        row.put("nbPassagersTotal", rs.getInt("nb_passagers_total"));
+                        byTournee.put(tourneeId, row);
+                        stopsByTournee.put(tourneeId, new ArrayList<>());
+                        stopKeysByTournee.put(tourneeId, new HashSet<>());
+                        reservationIdsByTournee.put(tourneeId, new LinkedHashSet<>());
+                    }
+
+                    Object reservationIdObj = rs.getObject("reservation_id");
+                    if (reservationIdObj != null) {
+                        Set<Integer> ids = reservationIdsByTournee.get(tourneeId);
+                        if (ids != null) ids.add(rs.getInt("reservation_id"));
+                    }
+
+                    Object stopOrdObj = rs.getObject("stop_ordre");
+                    if (stopOrdObj != null) {
+                        int stopOrd = rs.getInt("stop_ordre");
+                        String stopLieu = rs.getString("stop_lieu");
+                        Timestamp stopArrTs = rs.getTimestamp("stop_arrivee");
+                        String stopArr = stopArrTs != null ? stopArrTs.toLocalDateTime().toString().replace("T", " ") : null;
+
+                        List<Map<String, Object>> stops = stopsByTournee.get(tourneeId);
+                        Set<String> stopKeys = stopKeysByTournee.get(tourneeId);
+                        if (stops != null && stopKeys != null) {
+                            String key = stopOrd + "|" + (stopLieu != null ? stopLieu : "") + "|" + (stopArr != null ? stopArr : "");
+                            if (stopKeys.add(key)) {
+                                Map<String, Object> stop = new HashMap<>();
+                                stop.put("ordre", stopOrd);
+                                stop.put("lieu", stopLieu);
+                                stop.put("arrivee", stopArr);
+                                stops.add(stop);
+                            }
+                        }
+                    }
+                }
+
+                for (Map.Entry<Integer, Map<String, Object>> e : byTournee.entrySet()) {
+                    int tid = e.getKey();
+                    Map<String, Object> row = e.getValue();
+                    List<Map<String, Object>> stops = stopsByTournee.get(tid);
+                    row.put("stops", stops != null ? stops : Collections.emptyList());
+
+                    Set<Integer> resIds = reservationIdsByTournee.get(tid);
+                    List<Integer> resIdList = new ArrayList<>(resIds != null ? resIds : Collections.emptySet());
+                    Collections.sort(resIdList);
+                    row.put("reservationIds", resIdList);
+
+                    trajets.add(row);
+                }
+            }
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+
+        ModelView mv = new ModelView();
+        mv.setView("historiqueTrajets.jsp");
+        mv.addData("trajets", trajets);
+        mv.addData("selectedDate", date.toString());
         return mv;
     }
 
