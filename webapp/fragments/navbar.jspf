@@ -6,6 +6,7 @@
             <a class="nav-link" href="${pageContext.request.contextPath}/reservation/form">Creer une reservation</a>
             <a class="nav-link" href="${pageContext.request.contextPath}/voiture">Voitures</a>
             <a class="nav-link" href="${pageContext.request.contextPath}/reservation/planning">Assignation</a>
+            <a class="nav-link" href="${pageContext.request.contextPath}/reservation/historique-trajets">Historiques des trajets</a>
         </nav>
     </div>
 </div>
