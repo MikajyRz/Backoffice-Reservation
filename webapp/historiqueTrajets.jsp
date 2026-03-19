@@ -150,9 +150,9 @@
                                 <td class="cell-mono"><span class="badge badge-info">#${t.tourneeId}</span></td>
                                 <td><span class="badge badge-info">${t.vehicule}</span></td>
                                 <td>
-                                    <c:if test="${not empty t.reservationIds}">
-                                        <c:forEach var="rid" items="${t.reservationIds}">
-                                            <span class="badge badge-info">#${rid}</span>
+                                    <c:if test="${not empty t.reservationAllocations}">
+                                        <c:forEach var="ra" items="${t.reservationAllocations}">
+                                            <span class="badge badge-info">#${ra.id} (${ra.nb})</span>
                                         </c:forEach>
                                     </c:if>
                                 </td>

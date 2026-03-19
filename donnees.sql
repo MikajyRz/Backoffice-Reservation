@@ -1,4 +1,5 @@
 DELETE FROM reservation;
+DELETE FROM tournee_reservation;
 DELETE FROM tournee_stop;
 DELETE FROM tournee;
 DELETE FROM distance;
@@ -36,6 +37,7 @@ VALUES
 
 
 DELETE FROM reservation;
+DELETE FROM tournee_reservation;
 DELETE FROM tournee_stop;
 DELETE FROM tournee;
 DELETE FROM distance;
@@ -63,6 +65,7 @@ VALUES
 
 
 DELETE FROM reservation;
+DELETE FROM tournee_reservation;
 DELETE FROM tournee_stop;
 DELETE FROM tournee;
 DELETE FROM distance;
@@ -89,6 +92,7 @@ VALUES
 
 
 DELETE FROM reservation;
+DELETE FROM tournee_reservation;
 DELETE FROM tournee_stop;
 DELETE FROM tournee;
 DELETE FROM distance;
@@ -119,6 +123,7 @@ VALUES
 
 
 DELETE FROM reservation;
+DELETE FROM tournee_reservation;
 DELETE FROM tournee_stop;
 DELETE FROM tournee;
 DELETE FROM distance;
@@ -148,6 +153,7 @@ VALUES
 
 
 DELETE FROM reservation;
+DELETE FROM tournee_reservation;
 DELETE FROM tournee_stop;
 DELETE FROM tournee;
 DELETE FROM distance;
@@ -183,6 +189,7 @@ VALUES
 
 
 DELETE FROM reservation;
+DELETE FROM tournee_reservation;
 DELETE FROM tournee_stop;
 DELETE FROM tournee;
 DELETE FROM distance;
@@ -213,6 +220,7 @@ VALUES
 
 
 DELETE FROM reservation;
+DELETE FROM tournee_reservation;
 DELETE FROM tournee_stop;
 DELETE FROM tournee;
 DELETE FROM distance;
@@ -239,6 +247,7 @@ VALUES
 
 
 DELETE FROM reservation;
+DELETE FROM tournee_reservation;
 DELETE FROM tournee_stop;
 DELETE FROM tournee;
 DELETE FROM distance;
@@ -262,3 +271,67 @@ INSERT INTO reservation(id, id_client, nombre_passager, date_heure_arrive, id_li
 VALUES
 (6301,'C6301',5,'2026-04-18 09:00:00',2),
 (6302,'C6302',5,'2026-04-18 09:40:00',2);
+
+
+DELETE FROM reservation;
+DELETE FROM tournee_reservation;
+DELETE FROM tournee_stop;
+DELETE FROM tournee;
+DELETE FROM distance;
+DELETE FROM voiture;
+DELETE FROM lieu;
+DELETE FROM parametre;
+
+INSERT INTO parametre (vitesse_moyenne, temps_attente) VALUES (60, 30);
+
+INSERT INTO lieu(id, code, libelle) VALUES
+(1, 'TNR', 'Ivato Aeroport'),
+(2, 'ALP', 'Hotel Alpha'),
+(3, 'BET', 'Hotel Beta');
+
+INSERT INTO distance(from_lieu, to_lieu, kilometer) VALUES
+(1,2,10),(2,1,10),
+(1,3,20),(3,1,20),
+(2,3,12),(3,2,12);
+
+INSERT INTO voiture(id, immatricule, type_carburant, nb_place) VALUES
+(71,'V8','E',8),
+(72,'V3','E',3);
+
+INSERT INTO reservation(id, id_client, nombre_passager, date_heure_arrive, id_lieu)
+VALUES
+(7001,'C701',4,'2026-04-19 09:00:00',2),
+(7002,'C702',6,'2026-04-19 09:05:00',2),
+(7003,'C703',3,'2026-04-19 09:10:00',3);
+
+
+DELETE FROM reservation;
+DELETE FROM tournee_reservation;
+DELETE FROM tournee_stop;
+DELETE FROM tournee;
+DELETE FROM distance;
+DELETE FROM voiture;
+DELETE FROM lieu;
+DELETE FROM parametre;
+
+INSERT INTO parametre (vitesse_moyenne, temps_attente) VALUES (60, 30);
+
+INSERT INTO lieu(id, code, libelle) VALUES
+(1, 'TNR', 'Ivato Aeroport'),
+(2, 'ALP', 'Hotel Alpha'),
+(3, 'BET', 'Hotel Beta');
+
+INSERT INTO distance(from_lieu, to_lieu, kilometer) VALUES
+(1,2,10),(2,1,10),
+(1,3,20),(3,1,20),
+(2,3,12),(3,2,12);
+
+INSERT INTO voiture(id, immatricule, type_carburant, nb_place) VALUES
+(81,'V5','E',5),
+(82,'V3','E',3);
+
+INSERT INTO reservation(id, id_client, nombre_passager, date_heure_arrive, id_lieu)
+VALUES
+(8001,'C8001',6,'2026-04-20 09:00:00',2),
+(8002,'C8002',4,'2026-04-20 09:05:00',2),
+(8003,'C8003',3,'2026-04-20 09:10:00',3);

@@ -18,6 +18,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.HashSet;
 import java.util.Collections;
+import java.util.LinkedList;
 import java.util.stream.Collectors;
 
 import com.annotations.Api;
@@ -446,46 +447,89 @@ public class ReservationController {
                     }
 
                     // NB : un même véhicule peut être réutilisé sur un autre créneau => pas de liste globale "available"
-                    for (int i = 0; i < slotReservations.size(); i++) {
-                        ReservationRow res = slotReservations.get(i);
-                        VehicleBin bestFitExisting = findBestFitExistingBin(slotBins.values(), res.getNombre_passager());
+                    LinkedList<PendingDemand> freshQueue = new LinkedList<>();
+                    for (ReservationRow r : slotReservations) {
+                        if (r == null || r.getId() <= 0) continue;
+                        freshQueue.add(new PendingDemand(r, r.getNombre_passager(), false));
+                    }
+                    List<PendingDemand> remainderQueue = new ArrayList<>();
+
+                    while (!remainderQueue.isEmpty() || !freshQueue.isEmpty()) {
+                        PendingDemand d;
+                        if (!remainderQueue.isEmpty()) {
+                            d = remainderQueue.remove(0);
+                        } else {
+                            d = freshQueue.removeFirst();
+                        }
+                        if (d == null || d.reservation == null || d.remaining <= 0) continue;
+
+                        // 1) Tenter de placer entièrement dans un bin existant
+                        VehicleBin bestFitExisting = findBestFitExistingBin(slotBins.values(), d.remaining);
                         if (bestFitExisting != null) {
-                            bestFitExisting.add(res);
+                            bestFitExisting.addAllocation(d.reservation, d.remaining);
                             continue;
                         }
 
-                        List<Integer> remainingPassengers = new ArrayList<>();
-                        for (int j = i + 1; j < slotReservations.size(); j++) {
-                            remainingPassengers.add(slotReservations.get(j).getNombre_passager());
+                        // 2) Sinon, split possible dans un bin existant partiellement rempli
+                        VehicleBin partialBin = findBestPartialBin(slotBins.values());
+                        if (partialBin != null) {
+                            int take = Math.min(partialBin.remainingCapacity(), d.remaining);
+                            partialBin.addAllocation(d.reservation, take);
+                            d.remaining -= take;
+                            if (d.remaining > 0) {
+                                insertRemainderPrioritized(remainderQueue, new PendingDemand(d.reservation, d.remaining, true));
+                            }
+                            continue;
                         }
 
-                        VoitureRow newVehicle = findVehicleForNewBin(vehicles, usedVehicleIdsInSlot, res.getNombre_passager(), remainingPassengers, tripCountByVehicle);
+                        // 3) Ouvrir un nouveau véhicule (split autorisé)
+                        List<Integer> remainingPassengers = new ArrayList<>();
+                        for (PendingDemand rr : remainderQueue) remainingPassengers.add(rr.remaining);
+                        for (PendingDemand fr : freshQueue) remainingPassengers.add(fr.remaining);
+                        VoitureRow newVehicle = findVehicleForNewBinWithSplit(vehicles, usedVehicleIdsInSlot, d.remaining, remainingPassengers, tripCountByVehicle);
                         if (newVehicle == null) {
-                            unassigned.add(res);
+                            unassigned.add(new ReservationRow(d.reservation.getId(), d.reservation.getId_client(), d.remaining, d.reservation.getDate_heure_arrive(), d.reservation.getId_lieu(), d.reservation.getLieu_nom()));
                             continue;
                         }
 
                         usedVehicleIdsInSlot.add(newVehicle.getId());
                         VehicleBin bin = new VehicleBin(newVehicle);
-                        bin.add(res);
                         slotBins.put(newVehicle.getId(), bin);
 
-                        // Remplissage immédiat : on parcourt les réservations restantes du créneau
-                        // et on ajoute celles qui rentrent dans ce véhicule, avant d'ouvrir un autre véhicule.
-                        for (int j = i + 1; j < slotReservations.size(); ) {
-                            ReservationRow candidate = slotReservations.get(j);
-                            if (bin.remainingCapacity() >= candidate.getNombre_passager()) {
-                                bin.add(candidate);
-                                slotReservations.remove(j);
+                        // Affecter d'abord la demande courante
+                        int take = Math.min(bin.remainingCapacity(), d.remaining);
+                        bin.addAllocation(d.reservation, take);
+                        d.remaining -= take;
+                        if (d.remaining > 0) {
+                            insertRemainderPrioritized(remainderQueue, new PendingDemand(d.reservation, d.remaining, true));
+                        }
+
+                        // Remplissage immédiat : prioriser les restes, puis les nouvelles réservations
+                        while (bin.remainingCapacity() > 0 && (!remainderQueue.isEmpty() || !freshQueue.isEmpty())) {
+                            PendingDemand next;
+                            if (!remainderQueue.isEmpty()) {
+                                next = remainderQueue.remove(0);
                             } else {
-                                j++;
+                                next = freshQueue.removeFirst();
+                            }
+                            if (next == null || next.reservation == null || next.remaining <= 0) continue;
+
+                            int takeNext = Math.min(bin.remainingCapacity(), next.remaining);
+                            bin.addAllocation(next.reservation, takeNext);
+                            next.remaining -= takeNext;
+                            if (next.remaining > 0) {
+                                insertRemainderPrioritized(remainderQueue, new PendingDemand(next.reservation, next.remaining, true));
                             }
                         }
                     }
 
                     // Mettre à jour la disponibilité des véhicules utilisés dans ce créneau
                     for (VehicleBin b : slotBins.values()) {
-                        List<ReservationRow> ordered = new ArrayList<>(b.reservations);
+                        List<ReservationRow> ordered = new ArrayList<>();
+                        for (ReservationAllocation a : b.allocations) {
+                            if (a == null || a.reservation == null) continue;
+                            ordered.add(a.reservation);
+                        }
                         ordered.sort(Comparator
                                 .comparingInt((ReservationRow r) -> distanceFromAirportKm(r.getId_lieu()))
                                 .thenComparing(ReservationRow::getLieu_nom, Comparator.nullsLast(String::compareToIgnoreCase))
@@ -498,19 +542,23 @@ public class ReservationController {
                     // Incrémenter le compteur de trajets (1 par véhicule réellement utilisé dans cette fenêtre)
                     for (VehicleBin b : slotBins.values()) {
                         if (b == null || b.vehicle == null) continue;
-                        if (b.reservations == null || b.reservations.isEmpty()) continue;
+                        if (b.allocations == null || b.allocations.isEmpty()) continue;
                         int vehId = b.vehicle.getId();
                         tripCountByVehicle.put(vehId, tripCountByVehicle.getOrDefault(vehId, 0) + 1);
                     }
 
                     // Persist pour ce créneau : création d'une tournée par véhicule réellement utilisé
-                    // + insertion des stops + liaison reservation.id_tournee
+                    // + insertion des stops + liaison tournee_reservation
                     LocalDateTime windowEnd = slot.plusMinutes(getAttente());
                     for (VehicleBin b : slotBins.values()) {
                         if (b == null || b.vehicle == null) continue;
-                        if (b.reservations == null || b.reservations.isEmpty()) continue;
+                        if (b.allocations == null || b.allocations.isEmpty()) continue;
 
-                        List<ReservationRow> ordered = new ArrayList<>(b.reservations);
+                        List<ReservationRow> ordered = new ArrayList<>();
+                        for (ReservationAllocation a : b.allocations) {
+                            if (a == null || a.reservation == null) continue;
+                            ordered.add(a.reservation);
+                        }
                         ordered.sort(Comparator
                                 .comparingInt((ReservationRow r) -> distanceFromAirportKm(r.getId_lieu()))
                                 .thenComparing(ReservationRow::getLieu_nom, Comparator.nullsLast(String::compareToIgnoreCase))
@@ -519,7 +567,7 @@ public class ReservationController {
                         LocalDateTime retourAt = computeReturnToAirportDateTime(departEffectifFenetre, ordered);
 
                         int nbTotal = 0;
-                        for (ReservationRow r : b.reservations) nbTotal += r.getNombre_passager();
+                        for (ReservationAllocation a : b.allocations) nbTotal += a.nbAffectes;
 
                         int tourneeId;
                         try (PreparedStatement ps = con.prepareStatement(
@@ -569,15 +617,16 @@ public class ReservationController {
                             ordre++;
                         }
 
-                        // Lier les réservations à la tournée
-                        for (ReservationRow r : b.reservations) {
-                            if (r == null || r.getId() <= 0) continue;
+                        // Lier les réservations à la tournée (allocation partielle)
+                        for (ReservationAllocation a : b.allocations) {
+                            if (a == null || a.reservation == null) continue;
+                            if (a.reservation.getId() <= 0) continue;
+                            if (a.nbAffectes <= 0) continue;
                             try (PreparedStatement ps = con.prepareStatement(
-                                    "UPDATE reservation "
-                                            + "SET id_tournee = COALESCE(id_tournee, ?) "
-                                            + "WHERE id = ?")) {
+                                    "INSERT INTO tournee_reservation(id_tournee, id_reservation, nb_passagers_affectes) VALUES (?, ?, ?)")) {
                                 ps.setInt(1, tourneeId);
-                                ps.setInt(2, r.getId());
+                                ps.setInt(2, a.reservation.getId());
+                                ps.setInt(3, a.nbAffectes);
                                 ps.executeUpdate();
                             }
                         }
@@ -618,17 +667,18 @@ public class ReservationController {
         Map<Integer, VoitureRow> vehicleById = allVehicles.stream()
                 .collect(Collectors.toMap(VoitureRow::getId, v -> v));
 
-        // Lecture directe depuis la nouvelle persistance (tournee + tournee_stop)
+        // Lecture directe depuis la persistance (tournee + tournee_stop + tournee_reservation)
         List<Map<String, Object>> result = new ArrayList<>();
         String sql = "SELECT "
-                + "r.id AS reservation_id, r.id_client, r.nombre_passager, r.id_lieu, l.libelle AS lieu_nom, "
+                + "r.id AS reservation_id, r.id_client, r.nombre_passager, tr.nb_passagers_affectes AS nb_affectes, r.id_lieu, l.libelle AS lieu_nom, "
                 + "t.id AS tournee_id, t.id_voiture, t.depart_effectif, t.retour_aeroport, "
                 + "ts.ordre AS ordre_desserte, ts.heure_arrivee "
-                + "FROM reservation r "
-                + "JOIN tournee t ON t.id = r.id_tournee "
+                + "FROM tournee_reservation tr "
+                + "JOIN tournee t ON t.id = tr.id_tournee "
+                + "JOIN reservation r ON r.id = tr.id_reservation "
                 + "JOIN lieu l ON l.id = r.id_lieu "
                 + "LEFT JOIN tournee_stop ts ON ts.id_tournee = t.id AND ts.id_lieu = r.id_lieu "
-                + "WHERE DATE(r.date_heure_arrive) = ? AND r.id_tournee IS NOT NULL";
+                + "WHERE DATE(r.date_heure_arrive) = ?";
 
         try (Connection con = DbUtil.getConnection();
              PreparedStatement ps = con.prepareStatement(sql)) {
@@ -649,7 +699,7 @@ public class ReservationController {
                     trip.put("reservationId", rs.getInt("reservation_id"));
                     trip.put("clientId", rs.getString("id_client"));
                     trip.put("lieu", rs.getString("lieu_nom"));
-                    trip.put("nbPassagers", rs.getInt("nombre_passager"));
+                    trip.put("nbPassagers", rs.getInt("nb_affectes"));
                     trip.put("dateDepart", departTs != null ? departTs.toLocalDateTime().toString().replace("T", " ") : null);
                     trip.put("dateArrivee", arriveeTs != null ? arriveeTs.toLocalDateTime().toString().replace("T", " ") : null);
                     trip.put("dateRetourAeroport", retourTs != null ? retourTs.toLocalDateTime().toString().replace("T", " ") : null);
@@ -675,11 +725,12 @@ public class ReservationController {
 
     private List<AssignedReservation> getAssignedReservationRowsForDate(LocalDate date) {
         List<AssignedReservation> list = new ArrayList<>();
-        String sql = "SELECT r.id, r.id_client, r.nombre_passager, r.date_heure_arrive, r.id_lieu, l.libelle AS lieu_nom, t.id_voiture "
-                + "FROM reservation r "
-                + "JOIN tournee t ON t.id = r.id_tournee "
+        String sql = "SELECT r.id, r.id_client, tr.nb_passagers_affectes AS nombre_passager, r.date_heure_arrive, r.id_lieu, l.libelle AS lieu_nom, t.id_voiture "
+                + "FROM tournee_reservation tr "
+                + "JOIN tournee t ON t.id = tr.id_tournee "
+                + "JOIN reservation r ON r.id = tr.id_reservation "
                 + "JOIN lieu l ON l.id = r.id_lieu "
-                + "WHERE DATE(r.date_heure_arrive) = ? AND r.id_tournee IS NOT NULL";
+                + "WHERE DATE(r.date_heure_arrive) = ?";
 
         try (Connection con = DbUtil.getConnection();
              PreparedStatement ps = con.prepareStatement(sql)) {
@@ -705,10 +756,14 @@ public class ReservationController {
 
     private List<ReservationRow> getUnassignedReservationsForDate(LocalDate date) {
         List<ReservationRow> list = new ArrayList<>();
-        String sql = "SELECT r.id, r.id_client, r.nombre_passager, r.date_heure_arrive, r.id_lieu, l.libelle AS lieu_nom "
-                + "FROM reservation r JOIN lieu l ON l.id = r.id_lieu "
-                + "WHERE DATE(r.date_heure_arrive) = ? AND r.id_tournee IS NULL "
-                + "ORDER BY r.id ASC"; // Ordre de création (FIFO)
+        String sql = "SELECT r.id, r.id_client, (r.nombre_passager - COALESCE(SUM(tr.nb_passagers_affectes), 0)) AS remaining, r.date_heure_arrive, r.id_lieu, l.libelle AS lieu_nom "
+                + "FROM reservation r "
+                + "JOIN lieu l ON l.id = r.id_lieu "
+                + "LEFT JOIN tournee_reservation tr ON tr.id_reservation = r.id "
+                + "WHERE DATE(r.date_heure_arrive) = ? "
+                + "GROUP BY r.id, r.id_client, r.nombre_passager, r.date_heure_arrive, r.id_lieu, l.libelle "
+                + "HAVING (r.nombre_passager - COALESCE(SUM(tr.nb_passagers_affectes), 0)) > 0 "
+                + "ORDER BY r.id ASC";
 
         try (Connection con = DbUtil.getConnection();
              PreparedStatement ps = con.prepareStatement(sql)) {
@@ -717,7 +772,7 @@ public class ReservationController {
                 while (rs.next()) {
                     int id = rs.getInt("id");
                     String idClient = rs.getString("id_client");
-                    int nb = rs.getInt("nombre_passager");
+                    int nb = rs.getInt("remaining");
                     String dateHeure = rs.getTimestamp("date_heure_arrive").toLocalDateTime().toString();
                     int idLieu = rs.getInt("id_lieu");
                     String lieuNom = rs.getString("lieu_nom");
@@ -940,11 +995,12 @@ public class ReservationController {
         String sql = "SELECT "
                 + "t.id AS tournee_id, t.window_start, t.window_end, t.depart_effectif, t.retour_aeroport, t.nb_passagers_total, "
                 + "v.immatricule AS vehicule, "
-                + "r.id AS reservation_id, "
+                + "r.id AS reservation_id, tr.nb_passagers_affectes AS reservation_nb_affectes, "
                 + "ts.ordre AS stop_ordre, l.libelle AS stop_lieu, ts.heure_arrivee AS stop_arrivee "
                 + "FROM tournee t "
                 + "JOIN voiture v ON v.id = t.id_voiture "
-                + "LEFT JOIN reservation r ON r.id_tournee = t.id "
+                + "LEFT JOIN tournee_reservation tr ON tr.id_tournee = t.id "
+                + "LEFT JOIN reservation r ON r.id = tr.id_reservation "
                 + "LEFT JOIN tournee_stop ts ON ts.id_tournee = t.id "
                 + "LEFT JOIN lieu l ON l.id = ts.id_lieu "
                 + "WHERE DATE(t.window_start) = ? "
@@ -957,7 +1013,7 @@ public class ReservationController {
                 Map<Integer, Map<String, Object>> byTournee = new LinkedHashMap<>();
                 Map<Integer, List<Map<String, Object>>> stopsByTournee = new HashMap<>();
                 Map<Integer, Set<String>> stopKeysByTournee = new HashMap<>();
-                Map<Integer, Set<Integer>> reservationIdsByTournee = new HashMap<>();
+                Map<Integer, Map<Integer, Integer>> reservationQtyByTournee = new HashMap<>();
 
                 while (rs.next()) {
                     int tourneeId = rs.getInt("tournee_id");
@@ -981,13 +1037,15 @@ public class ReservationController {
                         byTournee.put(tourneeId, row);
                         stopsByTournee.put(tourneeId, new ArrayList<>());
                         stopKeysByTournee.put(tourneeId, new HashSet<>());
-                        reservationIdsByTournee.put(tourneeId, new LinkedHashSet<>());
+                        reservationQtyByTournee.put(tourneeId, new HashMap<>());
                     }
 
                     Object reservationIdObj = rs.getObject("reservation_id");
                     if (reservationIdObj != null) {
-                        Set<Integer> ids = reservationIdsByTournee.get(tourneeId);
-                        if (ids != null) ids.add(rs.getInt("reservation_id"));
+                        int rid = rs.getInt("reservation_id");
+                        int q = rs.getInt("reservation_nb_affectes");
+                        Map<Integer, Integer> qty = reservationQtyByTournee.get(tourneeId);
+                        if (qty != null) qty.put(rid, qty.getOrDefault(rid, 0) + q);
                     }
 
                     Object stopOrdObj = rs.getObject("stop_ordre");
@@ -1018,10 +1076,19 @@ public class ReservationController {
                     List<Map<String, Object>> stops = stopsByTournee.get(tid);
                     row.put("stops", stops != null ? stops : Collections.emptyList());
 
-                    Set<Integer> resIds = reservationIdsByTournee.get(tid);
-                    List<Integer> resIdList = new ArrayList<>(resIds != null ? resIds : Collections.emptySet());
-                    Collections.sort(resIdList);
-                    row.put("reservationIds", resIdList);
+                    Map<Integer, Integer> qty = reservationQtyByTournee.get(tid);
+                    List<Map<String, Object>> resAlloc = new ArrayList<>();
+                    if (qty != null && !qty.isEmpty()) {
+                        List<Integer> ids = new ArrayList<>(qty.keySet());
+                        Collections.sort(ids);
+                        for (Integer rid : ids) {
+                            Map<String, Object> m = new HashMap<>();
+                            m.put("id", rid);
+                            m.put("nb", qty.getOrDefault(rid, 0));
+                            resAlloc.add(m);
+                        }
+                    }
+                    row.put("reservationAllocations", resAlloc);
 
                     trajets.add(row);
                 }
@@ -1072,20 +1139,114 @@ public class ReservationController {
 
     private static class VehicleBin {
         final VoitureRow vehicle;
-        final List<ReservationRow> reservations = new ArrayList<>();
+        final List<ReservationAllocation> allocations = new ArrayList<>();
+        final Map<Integer, ReservationAllocation> byReservationId = new HashMap<>();
 
         VehicleBin(VoitureRow vehicle) {
             this.vehicle = vehicle;
         }
 
         void add(ReservationRow r) {
-            reservations.add(r);
+            addAllocation(r, r != null ? r.getNombre_passager() : 0);
+        }
+
+        void addAllocation(ReservationRow r, int nbAffectes) {
+            if (r == null || r.getId() <= 0) return;
+            if (nbAffectes <= 0) return;
+            ReservationAllocation existing = byReservationId.get(r.getId());
+            if (existing == null) {
+                ReservationAllocation a = new ReservationAllocation(r, nbAffectes);
+                allocations.add(a);
+                byReservationId.put(r.getId(), a);
+            } else {
+                existing.nbAffectes += nbAffectes;
+            }
         }
 
         int remainingCapacity() {
             int used = 0;
-            for (ReservationRow r : reservations) used += r.getNombre_passager();
+            for (ReservationAllocation a : allocations) used += a.nbAffectes;
             return vehicle.getNb_place() - used;
         }
+    }
+
+    private static class ReservationAllocation {
+        final ReservationRow reservation;
+        int nbAffectes;
+
+        ReservationAllocation(ReservationRow reservation, int nbAffectes) {
+            this.reservation = reservation;
+            this.nbAffectes = nbAffectes;
+        }
+    }
+
+    private static class PendingDemand {
+        final ReservationRow reservation;
+        int remaining;
+        final boolean isRemainder;
+
+        PendingDemand(ReservationRow reservation, int remaining, boolean isRemainder) {
+            this.reservation = reservation;
+            this.remaining = remaining;
+            this.isRemainder = isRemainder;
+        }
+    }
+
+    private static void insertRemainderPrioritized(List<PendingDemand> remainders, PendingDemand d) {
+        if (d == null || d.reservation == null || d.remaining <= 0) return;
+        int i = 0;
+        while (i < remainders.size()) {
+            PendingDemand cur = remainders.get(i);
+            if (cur.remaining < d.remaining) break;
+            if (cur.remaining == d.remaining && cur.reservation.getId() > d.reservation.getId()) break;
+            i++;
+        }
+        remainders.add(i, d);
+    }
+
+    private static VehicleBin findBestPartialBin(java.util.Collection<VehicleBin> bins) {
+        VehicleBin best = null;
+        int bestRemaining = Integer.MAX_VALUE;
+        for (VehicleBin bin : bins) {
+            int remaining = bin.remainingCapacity();
+            if (remaining > 0 && remaining < bestRemaining) {
+                best = bin;
+                bestRemaining = remaining;
+            }
+        }
+        return best;
+    }
+
+    private static VoitureRow findVehicleForNewBinWithSplit(List<VoitureRow> allVehicles, Set<Integer> usedVehicleIdsInSlot, int remainingPassengers, List<Integer> remainingPassengersList, Map<Integer, Integer> tripCountByVehicle) {
+        if (allVehicles == null || allVehicles.isEmpty()) return null;
+        int target = Math.max(1, remainingPassengers);
+        VoitureRow chosen = findVehicleForNewBin(allVehicles, usedVehicleIdsInSlot, target, remainingPassengersList, tripCountByVehicle);
+        if (chosen != null) return chosen;
+
+        List<VoitureRow> candidates = allVehicles.stream()
+                .filter(v -> !usedVehicleIdsInSlot.contains(v.getId()))
+                .collect(Collectors.toList());
+        if (candidates.isEmpty()) return null;
+
+        int minTrips = Integer.MAX_VALUE;
+        for (VoitureRow v : candidates) {
+            int tc = tripCountByVehicle != null ? tripCountByVehicle.getOrDefault(v.getId(), 0) : 0;
+            if (tc < minTrips) minTrips = tc;
+        }
+        final int finalMinTrips = minTrips;
+        List<VoitureRow> minTripPool = candidates.stream()
+                .filter(v -> (tripCountByVehicle != null ? tripCountByVehicle.getOrDefault(v.getId(), 0) : 0) == finalMinTrips)
+                .collect(Collectors.toList());
+        if (minTripPool.isEmpty()) minTripPool = candidates;
+
+        return minTripPool.stream()
+                .max(Comparator
+                        .comparingInt(VoitureRow::getNb_place)
+                        .thenComparing((VoitureRow v) -> {
+                            String carb = v.getType_carburant() != null ? v.getType_carburant().trim() : "";
+                            return "D".equalsIgnoreCase(carb) ? 0 : 1;
+                        })
+                        .thenComparingInt(VoitureRow::getId))
+                .orElse(null);
     }
 }
