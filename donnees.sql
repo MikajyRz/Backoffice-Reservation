@@ -2,6 +2,7 @@ DELETE FROM reservation;
 DELETE FROM tournee_reservation;
 DELETE FROM tournee_stop;
 DELETE FROM tournee;
+DELETE FROM voiture_disponibilite;
 DELETE FROM distance;
 DELETE FROM voiture;
 DELETE FROM lieu;
@@ -40,6 +41,7 @@ DELETE FROM reservation;
 DELETE FROM tournee_reservation;
 DELETE FROM tournee_stop;
 DELETE FROM tournee;
+DELETE FROM voiture_disponibilite;
 DELETE FROM distance;
 DELETE FROM voiture;
 DELETE FROM lieu;
@@ -68,6 +70,7 @@ DELETE FROM reservation;
 DELETE FROM tournee_reservation;
 DELETE FROM tournee_stop;
 DELETE FROM tournee;
+DELETE FROM voiture_disponibilite;
 DELETE FROM distance;
 DELETE FROM voiture;
 DELETE FROM lieu;
@@ -297,6 +300,9 @@ INSERT INTO distance(from_lieu, to_lieu, kilometer) VALUES
 INSERT INTO voiture(id, immatricule, type_carburant, nb_place) VALUES
 (71,'V8','E',8),
 (72,'V3','E',3);
+
+INSERT INTO voiture_disponibilite(id_voiture, jour, heure_dispo) VALUES
+(72, '2026-04-19', '09:15:00');
 
 INSERT INTO reservation(id, id_client, nombre_passager, date_heure_arrive, id_lieu)
 VALUES

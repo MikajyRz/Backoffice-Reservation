@@ -1,6 +1,7 @@
 -- Script de réinitialisation de la base de données
 -- Supprime les tables existantes
 DROP TABLE IF EXISTS distance CASCADE;
+DROP TABLE IF EXISTS voiture_disponibilite CASCADE;
 DROP TABLE IF EXISTS tournee_reservation CASCADE;
 DROP TABLE IF EXISTS tournee_stop CASCADE;
 DROP TABLE IF EXISTS tournee CASCADE;
@@ -23,6 +24,15 @@ CREATE TABLE voiture (
     type_carburant VARCHAR(2) NOT NULL,
     nb_place INTEGER NOT NULL CHECK (nb_place > 0),
     CONSTRAINT ck_voiture_type_carburant CHECK (type_carburant IN ('E', 'D', 'El', 'H'))
+);
+
+CREATE TABLE voiture_disponibilite (
+    id SERIAL PRIMARY KEY,
+    id_voiture INTEGER NOT NULL,
+    jour DATE NOT NULL,
+    heure_dispo TIME NOT NULL,
+    CONSTRAINT fk_voiture_disponibilite_voiture FOREIGN KEY (id_voiture) REFERENCES voiture(id) ON UPDATE CASCADE ON DELETE CASCADE,
+    CONSTRAINT uq_voiture_disponibilite UNIQUE (id_voiture, jour)
 );
 
 CREATE TABLE reservation (
@@ -72,6 +82,7 @@ ALTER TABLE reservation
 
 CREATE INDEX idx_reservation_date_heure_arrive ON reservation(date_heure_arrive);
 CREATE INDEX idx_reservation_tournee ON reservation(id_tournee);
+CREATE INDEX idx_voiture_disponibilite_voiture_jour ON voiture_disponibilite(id_voiture, jour);
 CREATE INDEX idx_tournee_reservation_tournee ON tournee_reservation(id_tournee);
 CREATE INDEX idx_tournee_reservation_reservation ON tournee_reservation(id_reservation);
 CREATE INDEX idx_tournee_voiture_start ON tournee(id_voiture, window_start);

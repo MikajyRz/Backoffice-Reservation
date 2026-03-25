@@ -129,7 +129,7 @@
 
     <c:if test="${not empty trajets}">
         <div class="card">
-            <h3>Trajets</h3>
+            <h3>Trajets pour ${selectedDate}</h3>
             <div class="table-wrap">
                 <table>
                     <thead>
@@ -186,6 +186,61 @@
             <div>Aucun trajet pour ce jour.</div>
         </div>
     </c:if>
+
+    <c:if test="${not empty trajetsAll}">
+        <div class="card">
+            <h3>Tous les trajets</h3>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Tournée</th>
+                            <th>Véhicule</th>
+                            <th>Réservations</th>
+                            <th>Fenêtre</th>
+                            <th>Départ effectif</th>
+                            <th>Retour Aéroport</th>
+                            <th>Passagers</th>
+                            <th>Stops</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <c:forEach var="t" items="${trajetsAll}">
+                            <tr>
+                                <td class="cell-mono"><span class="badge badge-info">#${t.tourneeId}</span></td>
+                                <td><span class="badge badge-info">${t.vehicule}</span></td>
+                                <td>
+                                    <c:if test="${not empty t.reservationAllocations}">
+                                        <c:forEach var="ra" items="${t.reservationAllocations}">
+                                            <span class="badge badge-info">#${ra.id} (${ra.nb})</span>
+                                        </c:forEach>
+                                    </c:if>
+                                </td>
+                                <td class="cell-mono">${t.windowStart} - ${t.windowEnd}</td>
+                                <td class="cell-mono">${t.departEffectif}</td>
+                                <td class="cell-mono">${t.retourAeroport}</td>
+                                <td class="cell-mono"><span class="badge badge-success">${t.nbPassagersTotal}</span></td>
+                                <td class="cell-stops">
+                                    <c:if test="${not empty t.stops}">
+                                        <ul class="stops-list">
+                                            <c:forEach var="s" items="${t.stops}">
+                                                <li class="stop-item">
+                                                    <div class="stop-ordre">${s.ordre}</div>
+                                                    <div class="stop-lieu">${s.lieu}</div>
+                                                    <div class="stop-arrivee">${s.arrivee}</div>
+                                                </li>
+                                            </c:forEach>
+                                        </ul>
+                                    </c:if>
+                                </td>
+                            </tr>
+                        </c:forEach>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </c:if>
+
 </div>
 
 </body>
