@@ -651,12 +651,31 @@ public class ReservationController {
                         }
                     }
 
-                    // Si on a des restes et plus de créneaux prévus : créer un créneau auto
-                    if (!carryOverRemainders.isEmpty() && queue.isEmpty() && autoWindowsLimit > 0) {
-                        LocalDateTime nextSlot = slot.plusMinutes(attenteMinutes);
-                        if (nextSlot.toLocalDate().equals(date)) {
-                            queue.add(new ReservationWindow(nextSlot, new ArrayList<>()));
-                            autoWindowsLimit--;
+                    // Reactive Dispatching : vider les restes uniquement s'il y a un décalage important
+                    // avec la prochaine arrivée prévue, pour ne pas casser la synergie de groupe (pooling).
+                    if (!carryOverRemainders.isEmpty() && autoWindowsLimit > 0) {
+                        LocalDateTime nextScheduled = !queue.isEmpty() ? queue.peekFirst().windowStart : LocalDateTime.MAX;
+                        
+                        // Chercher le prochain retour de véhicule après 'slot'
+                        LocalDateTime earliestReturn = LocalDateTime.MAX;
+                        for (LocalDateTime av : vehicleAvailableAt.values()) {
+                            if (av != null && av.isAfter(slot) && av.isBefore(earliestReturn)) {
+                                earliestReturn = av;
+                            }
+                        }
+
+                        // On ne crée une fenêtre réactive que si :
+                        // 1. Un véhicule revient
+                        // 2. ET ce retour est significativement AVANT le début de la prochaine fenêtre prévue
+                        //    (pour laisser le temps au pooling d'opérer) OU s'il n'y a plus de réservations.
+                        if (earliestReturn != LocalDateTime.MAX) {
+                            LocalDateTime threshold = nextScheduled.minusMinutes(attenteMinutes);
+                            if (queue.isEmpty() || earliestReturn.isBefore(threshold)) {
+                                if (earliestReturn.toLocalDate().equals(date)) {
+                                    queue.addFirst(new ReservationWindow(earliestReturn, new ArrayList<>()));
+                                    autoWindowsLimit--;
+                                }
+                            }
                         }
                     }
 
