@@ -133,6 +133,43 @@
     </div>
 
     <c:if test="${not empty result}">
+        <c:if test="${not empty result.unassignedBySlot}">
+            <div class="card">
+                <h3 style="color: #9a3412;"><i class="fas fa-user-slash"></i> Restes / non assignés par créneau</h3>
+                <p class="error-text" style="color:#9a3412;">Passagers restants (ou demandes non servies) regroupés par créneau.</p>
+                <c:forEach var="entry" items="${result.unassignedBySlot}">
+                    <c:set var="slotKey" value="${entry.key}" />
+                    <c:set var="rows" value="${entry.value}" />
+
+                    <c:if test="${not empty rows}">
+                        <div style="margin-top: 12px; font-weight: 800; color: #0f172a;">Créneau: ${slotKey}</div>
+                        <table style="margin-top: 8px;">
+                            <thead>
+                                <tr>
+                                    <th>Réservation</th>
+                                    <th>Client</th>
+                                    <th>Passagers restants</th>
+                                    <th>Lieu</th>
+                                    <th>Date &amp; Heure</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <c:forEach var="u" items="${rows}">
+                                    <tr>
+                                        <td>#${u.id}</td>
+                                        <td>${u.id_client}</td>
+                                        <td>${u.nombre_passager}</td>
+                                        <td>${u.lieu_nom}</td>
+                                        <td>${u.date_heure_arrive}</td>
+                                    </tr>
+                                </c:forEach>
+                            </tbody>
+                        </table>
+                    </c:if>
+                </c:forEach>
+            </div>
+        </c:if>
+
         <div class="card">
             <h3><i class="fas fa-check-circle" style="color: #28a745;"></i> Trajets assignés</h3>
             <p>Voici la liste des réservations qui ont pu être assignées à un véhicule.</p>
@@ -145,13 +182,46 @@
                         <th>Réservation</th>
                         <th>Passagers</th>
                         <th>Lieu</th>
+                        <th>Créneau</th>
                         <th>Départ</th>
                         <th>Arrivée</th>
                         <th>Retour Aéroport</th>
                     </tr>
                 </thead>
                 <tbody>
+                    <c:set var="lastWindowStart" value="" />
                     <c:forEach var="trip" items="${result.assigned}">
+                        <c:if test="${trip.windowStart ne lastWindowStart}">
+                            <c:if test="${not empty lastWindowStart}">
+                                <c:if test="${not empty result.unassignedBySlot[lastWindowStart]}">
+                                    <tr>
+                                        <td colspan="10" style="background:#fff7ed; font-weight:800; color:#9a3412;">
+                                            Non assignés dans ce créneau
+                                        </td>
+                                    </tr>
+                                    <c:forEach var="u" items="${result.unassignedBySlot[lastWindowStart]}">
+                                        <tr>
+                                            <td><strong>-</strong></td>
+                                            <td><strong style="color: #9a3412;">-</strong></td>
+                                            <td>-</td>
+                                            <td>#${u.id}</td>
+                                            <td>${u.nombre_passager}</td>
+                                            <td>${u.lieu_nom}</td>
+                                            <td>${lastWindowStart}</td>
+                                            <td>-</td>
+                                            <td>-</td>
+                                            <td>-</td>
+                                        </tr>
+                                    </c:forEach>
+                                </c:if>
+                            </c:if>
+                            <tr>
+                                <td colspan="10" style="background:#f8fafc; font-weight:800; color:#0f172a;">
+                                    Créneau: ${trip.windowStart} - ${trip.windowEnd}
+                                </td>
+                            </tr>
+                            <c:set var="lastWindowStart" value="${trip.windowStart}" />
+                        </c:if>
                         <tr>
                             <td><strong>${trip.vehiculeDetails.id}</strong></td>
                             <td><strong style="color: #0071c2;">${trip.vehicule}</strong></td>
@@ -162,11 +232,36 @@
                             <td>#${trip.reservationId}</td>
                             <td>${trip.nbPassagers}</td>
                             <td>${trip.lieu}</td>
+                            <td>${trip.windowStart}</td>
                             <td>${trip.dateDepart}</td>
                             <td>${trip.dateArrivee}</td>
                             <td>${trip.dateRetourAeroport}</td>
                         </tr>
                     </c:forEach>
+
+                    <c:if test="${not empty lastWindowStart}">
+                        <c:if test="${not empty result.unassignedBySlot[lastWindowStart]}">
+                            <tr>
+                                <td colspan="10" style="background:#fff7ed; font-weight:800; color:#9a3412;">
+                                    Non assignés dans ce créneau
+                                </td>
+                            </tr>
+                            <c:forEach var="u" items="${result.unassignedBySlot[lastWindowStart]}">
+                                <tr>
+                                    <td><strong>-</strong></td>
+                                    <td><strong style="color: #9a3412;">-</strong></td>
+                                    <td>-</td>
+                                    <td>#${u.id}</td>
+                                    <td>${u.nombre_passager}</td>
+                                    <td>${u.lieu_nom}</td>
+                                    <td>${lastWindowStart}</td>
+                                    <td>-</td>
+                                    <td>-</td>
+                                    <td>-</td>
+                                </tr>
+                            </c:forEach>
+                        </c:if>
+                    </c:if>
                 </tbody>
             </table>
         </div>

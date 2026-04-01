@@ -1,8 +1,12 @@
 package test.java;
 
+import java.sql.Date;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.Time;
+import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -22,6 +26,63 @@ public class VoitureController {
         ModelView mv = new ModelView();
         mv.setView("voitureList.jsp");
         mv.addData("voitures", listAll());
+        return mv;
+    }
+
+    @GetMapping("/voiture/disponibilite")
+    public ModelView disponibilitePage(@Param("jour") String jour) {
+        ModelView mv = new ModelView();
+        mv.setView("voitureDisponibilite.jsp");
+        mv.addData("voitures", listAll());
+        mv.addData("disponibilites", listDisponibilites(jour));
+        mv.addData("jour", jour);
+        return mv;
+    }
+
+    @PostMapping("/voiture/disponibilite/save")
+    public ModelView saveDisponibilite(
+            @Param("id_voiture") Integer idVoiture,
+            @Param("jour") String jour,
+            @Param("heure_dispo") String heureDispo) {
+
+        if (idVoiture == null || jour == null || jour.trim().isEmpty() || heureDispo == null || heureDispo.trim().isEmpty()) {
+            ModelView mv = new ModelView();
+            mv.setView("voitureDisponibilite.jsp");
+            mv.addData("error", "Veuillez sélectionner une voiture, un jour et une heure.");
+            mv.addData("voitures", listAll());
+            mv.addData("disponibilites", listDisponibilites(jour));
+            mv.addData("jour", jour);
+            return mv;
+        }
+
+        try (Connection con = DbUtil.getConnection();
+             PreparedStatement ps = con.prepareStatement(
+                     "INSERT INTO voiture_disponibilite(id_voiture, jour, heure_dispo) VALUES (?, ?, ?) " +
+                             "ON CONFLICT (id_voiture, jour) DO UPDATE SET heure_dispo = EXCLUDED.heure_dispo")) {
+
+            LocalDate d = LocalDate.parse(jour.trim());
+            LocalTime t = LocalTime.parse(heureDispo.trim());
+
+            ps.setInt(1, idVoiture);
+            ps.setDate(2, Date.valueOf(d));
+            ps.setTime(3, Time.valueOf(t));
+            ps.executeUpdate();
+        } catch (Exception e) {
+            ModelView mv = new ModelView();
+            mv.setView("voitureDisponibilite.jsp");
+            mv.addData("error", "Erreur lors de l'enregistrement : " + e.getMessage());
+            mv.addData("voitures", listAll());
+            mv.addData("disponibilites", listDisponibilites(jour));
+            mv.addData("jour", jour);
+            return mv;
+        }
+
+        ModelView mv = new ModelView();
+        mv.setView("voitureDisponibilite.jsp");
+        mv.addData("success", "Disponibilité enregistrée.");
+        mv.addData("voitures", listAll());
+        mv.addData("disponibilites", listDisponibilites(jour));
+        mv.addData("jour", jour);
         return mv;
     }
 
@@ -215,5 +276,78 @@ public class VoitureController {
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+    public static class VoitureDisponibiliteRow {
+        private int id;
+        private int idVoiture;
+        private String immatricule;
+        private String jour;
+        private String heureDispo;
+
+        public VoitureDisponibiliteRow(int id, int idVoiture, String immatricule, String jour, String heureDispo) {
+            this.id = id;
+            this.idVoiture = idVoiture;
+            this.immatricule = immatricule;
+            this.jour = jour;
+            this.heureDispo = heureDispo;
+        }
+
+        public int getId() {
+            return id;
+        }
+
+        public int getIdVoiture() {
+            return idVoiture;
+        }
+
+        public String getImmatricule() {
+            return immatricule;
+        }
+
+        public String getJour() {
+            return jour;
+        }
+
+        public String getHeureDispo() {
+            return heureDispo;
+        }
+    }
+
+    private static List<VoitureDisponibiliteRow> listDisponibilites(String jourFilter) {
+        List<VoitureDisponibiliteRow> rows = new ArrayList<>();
+        boolean hasFilter = jourFilter != null && !jourFilter.trim().isEmpty();
+        String sql =
+                "SELECT vd.id, v.id AS id_voiture, v.immatricule, vd.jour, vd.heure_dispo " +
+                        "FROM voiture_disponibilite vd " +
+                        "JOIN voiture v ON v.id = vd.id_voiture " +
+                        (hasFilter ? "WHERE vd.jour = ? " : "") +
+                        "ORDER BY vd.jour DESC, v.immatricule ASC";
+
+        try (Connection con = DbUtil.getConnection();
+             PreparedStatement ps = con.prepareStatement(sql)) {
+
+            if (hasFilter) {
+                ps.setDate(1, Date.valueOf(LocalDate.parse(jourFilter.trim())));
+            }
+
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    Date d = rs.getDate("jour");
+                    Time t = rs.getTime("heure_dispo");
+                    rows.add(new VoitureDisponibiliteRow(
+                            rs.getInt("id"),
+                            rs.getInt("id_voiture"),
+                            rs.getString("immatricule"),
+                            d != null ? d.toString() : null,
+                            t != null ? t.toLocalTime().toString() : null
+                    ));
+                }
+            }
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+
+        return rows;
     }
 }
