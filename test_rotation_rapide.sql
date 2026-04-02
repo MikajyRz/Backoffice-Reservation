@@ -63,3 +63,20 @@ INSERT INTO reservation(id, id_client, nombre_passager, date_heure_arrive, id_li
     
     -- Groupe 2 (Créneau 2)
     (2, 'C2', 6, '2026-04-01 08:25:00', 3, NULL);
+
+
+-- Résultats de la planification
+-- Trajets assignés
+-- Voici la liste des réservations qui ont pu être assignées à un véhicule.
+
+-- # ID	Véhicule	Détails Véhicule	Réservation	Passagers	Lieu	Créneau	Départ	Arrivée	Retour Aéroport
+-- Créneau: 2026-04-01 08:00 - 2026-04-01 08:30
+-- 1	VAN-8	D 8 places	#1	8	Proche (10km)	2026-04-01 08:00	2026-04-01 08:00	2026-04-01 08:10	2026-04-01 08:20
+-- 1	VAN-8	D 8 places	#2	4	Loin (45km)	2026-04-01 08:00	2026-04-01 08:25	2026-04-01 09:10	2026-04-01 09:55
+-- 2	BER-4	E 4 places	#1	2	Proche (10km)	2026-04-01 08:00	2026-04-01 08:25	2026-04-01 08:35	2026-04-01 09:55
+-- 2	BER-4	E 4 places	#2	2	Loin (45km)	2026-04-01 08:00	2026-04-01 08:25	2026-04-01 09:10	2026-04-01 09:55
+-- Véhicules non utilisés
+-- Ces véhicules étaient disponibles mais n'ont pas été nécessaires ou ne correspondaient pas aux critères.
+
+-- # ID	Immatriculation	Carburant	Capacité
+-- 3	VAN-12	D	12 places

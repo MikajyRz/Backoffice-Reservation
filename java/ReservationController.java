@@ -1518,20 +1518,28 @@ public class ReservationController {
 
     private static VoitureRow findVehicleForNewBinWithSplit(List<VoitureRow> allVehicles, Set<Integer> usedVehicleIdsInSlot, int remainingPassengers, List<Integer> remainingPassengersList, Map<Integer, Integer> tripCountByVehicle, boolean preferFullFit, Map<Integer, LocalDateTime> vehicleAvailableAt, LocalDateTime slotTime) {
         if (allVehicles == null || allVehicles.isEmpty()) return null;
-        int target = Math.max(1, remainingPassengers);
+        int currentTaskDemand = Math.max(1, remainingPassengers);
 
-        // Pour les restes (preferFullFit=true), on essaye d'abord de tout prendre d'un coup.
+        // Calculer la demande TOTALE restant à satisfaire dans ce créneau (Pooling)
+        int totalSlotDemand = currentTaskDemand;
+        if (remainingPassengersList != null) {
+            for (Integer p : remainingPassengersList) totalSlotDemand += p;
+        }
+
+        // Stratégie 1 : Pour les restes (reliquats), on essaye d'abord de tout prendre d'un coup.
         if (preferFullFit) {
-            VoitureRow chosen = findVehicleForNewBin(allVehicles, usedVehicleIdsInSlot, target, remainingPassengersList, tripCountByVehicle, vehicleAvailableAt, slotTime);
+            VoitureRow chosen = findVehicleForNewBin(allVehicles, usedVehicleIdsInSlot, currentTaskDemand, remainingPassengersList, tripCountByVehicle, vehicleAvailableAt, slotTime);
             if (chosen != null) return chosen;
         }
 
+        // Stratégie 2 : Optimisation globale (Pooling)
+        // On essaie de trouver un véhicule qui peut contenir le maximum de la demande totale du créneau.
         List<VoitureRow> candidates = allVehicles.stream()
                 .filter(v -> !usedVehicleIdsInSlot.contains(v.getId()))
                 .collect(Collectors.toList());
         if (candidates.isEmpty()) return null;
 
-        // Option 2 (critère équilibre temps)
+        // Filtrer par disponibilité temporelle
         List<VoitureRow> availableNow = candidates.stream()
                 .filter(v -> {
                     LocalDateTime av = vehicleAvailableAt != null ? vehicleAvailableAt.get(v.getId()) : null;
@@ -1540,32 +1548,15 @@ public class ReservationController {
                 .collect(Collectors.toList());
         List<VoitureRow> pool = availableNow.isEmpty() ? candidates : availableNow;
 
-        if (!preferFullFit && target > 8) {
-            VoitureRow fullFit = findVehicleForNewBin(allVehicles, usedVehicleIdsInSlot, target, remainingPassengersList, tripCountByVehicle, vehicleAvailableAt, slotTime);
-            if (fullFit != null) return fullFit;
+        // Si la demande totale est importante, on force l'utilisation du plus gros véhicule capable de tout prendre
+        int poolingThreshold = 4; // Si on a plus de 4 personnes au total, on commence à réfléchir "Grand Groupe"
+        if (totalSlotDemand >= poolingThreshold) {
+            VoitureRow bigVehicle = findVehicleForNewBin(allVehicles, usedVehicleIdsInSlot, totalSlotDemand, remainingPassengersList, tripCountByVehicle, vehicleAvailableAt, slotTime);
+            if (bigVehicle != null) return bigVehicle;
         }
 
-        if (!preferFullFit) {
-            List<VoitureRow> minTripPool = filterMinTripPool(pool, tripCountByVehicle);
-
-            List<VoitureRow> under = minTripPool.stream()
-                    .filter(v -> v.getNb_place() < target)
-                    .collect(Collectors.toList());
-            if (!under.isEmpty()) {
-                return under.stream()
-                        .max(Comparator
-                                .comparingInt(VoitureRow::getNb_place)
-                                .thenComparingInt(ReservationController::carbRankDieselFirstForMax)
-                                .thenComparingInt(v -> -v.getId()))
-                        .orElse(null);
-            }
-
-            VoitureRow chosen = findVehicleForNewBin(allVehicles, usedVehicleIdsInSlot, target, remainingPassengersList, tripCountByVehicle, vehicleAvailableAt, slotTime);
-            if (chosen != null) return chosen;
-        }
-
+        // Si on ne peut pas tout prendre d'un coup, on prend le plus gros disponible pour enlever le maximum
         List<VoitureRow> minTripPool = filterMinTripPool(pool, tripCountByVehicle);
-
         return minTripPool.stream()
                 .max(Comparator
                         .comparingInt(VoitureRow::getNb_place)
