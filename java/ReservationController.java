@@ -54,50 +54,7 @@ public class ReservationController {
         return windowStart;
     }
 
-    private static class ReservationWindow {
-        final LocalDateTime windowStart;
-        final List<ReservationRow> reservations;
 
-        ReservationWindow(LocalDateTime windowStart, List<ReservationRow> reservations) {
-            this.windowStart = windowStart;
-            this.reservations = reservations;
-        }
-    }
-
-    private static List<ReservationWindow> buildPendingWindows(List<ReservationRow> pending) {
-        if (pending == null || pending.isEmpty()) return Collections.emptyList();
-
-        int attente = getAttente();
-        List<ReservationRow> sorted = new ArrayList<>(pending);
-        sorted.sort(Comparator
-                .comparing((ReservationRow r) -> LocalDateTime.parse(r.getDate_heure_arrive()))
-                .thenComparingInt(ReservationRow::getId));
-
-        List<ReservationWindow> windows = new ArrayList<>();
-        int i = 0;
-        while (i < sorted.size()) {
-            ReservationRow first = sorted.get(i);
-            LocalDateTime start = LocalDateTime.parse(first.getDate_heure_arrive());
-            LocalDateTime endInclusive = start.plusMinutes(attente);
-
-            List<ReservationRow> group = new ArrayList<>();
-            group.add(first);
-            i++;
-            while (i < sorted.size()) {
-                ReservationRow r = sorted.get(i);
-                LocalDateTime t = LocalDateTime.parse(r.getDate_heure_arrive());
-                if (!t.isAfter(endInclusive)) {
-                    group.add(r);
-                    i++;
-                } else {
-                    break;
-                }
-            }
-
-            windows.add(new ReservationWindow(start, group));
-        }
-        return windows;
-    }
 
     private static class VehicleTrip {
         final LocalDateTime windowStart;
@@ -346,46 +303,33 @@ public class ReservationController {
     @Api
     @PostMapping("/api/plan-date")
     public Map<String, Object> planDate(@Param("date") String dateStr) {
-        // Étape 1.1 : Parser la date
+        // Étape 1 : Parser la date
         LocalDate date = LocalDate.parse(dateStr);
 
-        // Étape 1.2 : Récupérer toutes les réservations non assignées pour cette date
+        // Étape 2 : Récupérer toutes les réservations non assignées pour cette date
         List<ReservationRow> pendingReservations = getUnassignedReservationsForDate(date);
 
-        // Étape 1.3 : Récupérer véhicules disponibles (réutilisables selon créneau)
+        // Étape 3 : Récupérer véhicules
         List<VoitureRow> vehicles = listAllVehicles();
+        Map<Integer, VoitureRow> vehicleById = vehicles.stream()
+                .collect(Collectors.toMap(VoitureRow::getId, v -> v));
 
-        // Init lists
+        // Init résultat
         List<Map<String, Object>> assigned = new ArrayList<>();
         List<ReservationRow> unassigned = new ArrayList<>();
         Map<String, List<ReservationRow>> unassignedBySlot = new LinkedHashMap<>();
 
-        // 1.4 : Récupérer les réservations déjà assignées pour cette date (elles restent en base)
-        List<AssignedReservation> alreadyAssigned = getAssignedReservationRowsForDate(date);
-
-        // 1.5 : Indexer les véhicules par id
-        Map<Integer, VoitureRow> vehicleById = vehicles.stream()
-                .collect(Collectors.toMap(VoitureRow::getId, v -> v));
-
-        // 1.6 : Construire l'état des "bins" déjà existants par créneau (date+heure) et véhicule
-        // Note: on conserve l'ancien stockage "par heure" pour ne pas casser la persistance.
-        Map<LocalDateTime, Map<Integer, VehicleBin>> binsBySlot = new LinkedHashMap<>();
-        for (AssignedReservation ar : alreadyAssigned) {
-            VoitureRow v = vehicleById.get(ar.idVoiture);
-            if (v == null) continue;
-            VehicleBin bin = binsBySlot
-                    .computeIfAbsent(ar.dateTime, k -> new LinkedHashMap<>())
-                    .computeIfAbsent(ar.idVoiture, k -> new VehicleBin(v));
-            bin.add(ar.toReservationRow());
-        }
-
-        // Disponibilité par véhicule : heure à laquelle il est de retour à l'aéroport (donc réutilisable)
+        // Étape 4 : Initialiser le registre de disponibilité des véhicules
         Map<Integer, LocalDateTime> vehicleAvailableAt = new HashMap<>();
+        // Compteur de trajets effectués par véhicule (pour équité de rotation)
+        Map<Integer, Integer> tripCountByVehicle = new HashMap<>();
         for (VoitureRow v : vehicles) {
-            vehicleAvailableAt.put(v.getId(), LocalDateTime.MIN);
+            // Disponibilité par défaut : 00:00 (minuit du jour planifié)
+            vehicleAvailableAt.put(v.getId(), LocalDateTime.of(date, LocalTime.MIDNIGHT));
+            tripCountByVehicle.put(v.getId(), 0);
         }
 
-        // Initialiser la disponibilité à partir de la table voiture_disponibilite (dispo du jour)
+        // Lire les dispos depuis voiture_disponibilite
         try (Connection con = DbUtil.getConnection();
              PreparedStatement ps = con.prepareStatement(
                      "SELECT id_voiture, heure_dispo FROM voiture_disponibilite WHERE jour = ?")) {
@@ -406,316 +350,320 @@ public class ReservationController {
             throw new RuntimeException(e);
         }
 
-        // Compteur de trajets effectués par véhicule (Aéroport -> ... -> Aéroport)
-        // Tous les véhicules sont à l'aéroport à 00:00 avec 0 trajet.
-        Map<Integer, Integer> tripCountByVehicle = new HashMap<>();
-        for (VoitureRow v : vehicles) {
-            tripCountByVehicle.put(v.getId(), 0);
-        }
-
-        // Initialiser la disponibilité à partir des réservations déjà assignées en base
-        // (on prend le retour à l'aéroport comme fin de mission)
-        // IMPORTANT: toutes les tournées de la même fenêtre partent au même departEffectif.
+        // Étape 5 : Prendre en compte les réservations déjà assignées pour la disponibilité
+        List<AssignedReservation> alreadyAssigned = getAssignedReservationRowsForDate(date);
         if (!alreadyAssigned.isEmpty()) {
             List<AssignedWindow> windows = buildAssignedWindows(alreadyAssigned);
             for (AssignedWindow w : windows) {
                 LocalDateTime departEffectif = computeEffectiveDepartFromAssignedRows(w.windowStart, w.rows);
-
                 Map<Integer, List<ReservationRow>> perVehicle = new HashMap<>();
                 for (AssignedReservation ar : w.rows) {
                     if (!vehicleById.containsKey(ar.idVoiture)) continue;
                     perVehicle.computeIfAbsent(ar.idVoiture, k -> new ArrayList<>()).add(ar.toReservationRow());
                 }
+                for (Map.Entry<Integer, List<ReservationRow>> entry : perVehicle.entrySet()) {
+                    List<ReservationRow> ordered = new ArrayList<>(entry.getValue());
+                    ordered.sort(Comparator
+                            .comparingInt((ReservationRow r) -> distanceFromAirportKm(r.getId_lieu()))
+                            .thenComparing(ReservationRow::getLieu_nom, Comparator.nullsLast(String::compareToIgnoreCase))
+                            .thenComparingInt(ReservationRow::getId));
+                    LocalDateTime returnAt = computeReturnToAirportDateTime(departEffectif, ordered);
+                    LocalDateTime current = vehicleAvailableAt.getOrDefault(entry.getKey(), LocalDateTime.MIN);
+                    if (returnAt.isAfter(current)) vehicleAvailableAt.put(entry.getKey(), returnAt);
+                    // Compter les tournées déjà effectuées
+                    tripCountByVehicle.merge(entry.getKey(), 1, Integer::sum);
+                }
+            }
+        }
 
-                List<Integer> vehIds = new ArrayList<>(perVehicle.keySet());
-                vehIds.sort(Comparator.naturalOrder());
-                for (Integer vehId : vehIds) {
-                    List<ReservationRow> ordered = new ArrayList<>(perVehicle.getOrDefault(vehId, Collections.emptyList()));
+        // Étape 6 : Construire la file d'attente passagers (reste_a_transporter)
+        // Triée par date_heure_arrive ASC, puis par nombre_passager DESC (plus grands d'abord),
+        // puis par distance ASC (plus proche d'abord), puis par nom ASC (ordre alphabétique)
+        List<PendingDemand> passengerQueue = new ArrayList<>();
+        for (ReservationRow r : pendingReservations) {
+            if (r == null || r.getId() <= 0) continue;
+            passengerQueue.add(new PendingDemand(r, r.getNombre_passager(), false));
+        }
+        passengerQueue.sort(Comparator
+                .comparing((PendingDemand pd) -> LocalDateTime.parse(pd.reservation.getDate_heure_arrive()))
+                .thenComparing(Comparator.comparingInt((PendingDemand pd) -> pd.remaining).reversed())
+                .thenComparingInt((PendingDemand pd) -> distanceFromAirportKm(pd.reservation.getId_lieu()))
+                .thenComparing((PendingDemand pd) -> pd.reservation.getLieu_nom(), Comparator.nullsLast(String::compareToIgnoreCase))
+                .thenComparingInt(pd -> pd.reservation.getId()));
+
+        int attenteMinutes = getAttente();
+        int maxIterations = 500; // Garde-fou anti-boucle infinie
+        int iterations = 0;
+
+        // =====================================================================
+        // BOUCLE PRINCIPALE : L'ORDONNANCEUR VÉHICULE-PAR-VÉHICULE
+        // Tant qu'il reste des passagers avec reste_a_transporter > 0
+        // =====================================================================
+        try (Connection con = DbUtil.getConnection()) {
+            con.setAutoCommit(false);
+            try {
+                while (iterations++ < maxIterations) {
+                    // Vérifier s'il reste des passagers à transporter
+                    boolean hasRemaining = false;
+                    for (PendingDemand pd : passengerQueue) {
+                        if (pd.remaining > 0) { hasRemaining = true; break; }
+                    }
+                    if (!hasRemaining) break;
+
+                    // --- Étape A : Trouver le véhicule avec la plus petite prochaine_dispo ---
+                    // Tie-break : moins de trajets effectués > plus grande capacité > Diesel > plus petit id
+                    int bestVehicleId = -1;
+                    LocalDateTime bestDispo = null;
+                    for (Map.Entry<Integer, LocalDateTime> entry : vehicleAvailableAt.entrySet()) {
+                        VoitureRow v = vehicleById.get(entry.getKey());
+                        if (v == null) continue;
+                        LocalDateTime dispo = entry.getValue();
+                        if (dispo == null) continue;
+                        // Ignorer les véhicules qui ne reviennent pas dans la journée
+                        if (dispo.toLocalDate().isAfter(date)) continue;
+
+                        if (bestVehicleId < 0) {
+                            bestDispo = dispo;
+                            bestVehicleId = entry.getKey();
+                            continue;
+                        }
+                        VoitureRow best = vehicleById.get(bestVehicleId);
+                        int cmpDispo = dispo.compareTo(bestDispo);
+                        if (cmpDispo > 0) continue; // ce véhicule est moins disponible
+                        if (cmpDispo < 0) { bestDispo = dispo; bestVehicleId = entry.getKey(); continue; }
+                        // Même dispo : tie-break
+                        int tripsV = tripCountByVehicle.getOrDefault(v.getId(), 0);
+                        int tripsBest = tripCountByVehicle.getOrDefault(best.getId(), 0);
+                        if (tripsV < tripsBest) { bestDispo = dispo; bestVehicleId = entry.getKey(); continue; }
+                        if (tripsV > tripsBest) continue;
+                        // Même nb de trajets : capacité maximale
+                        if (v.getNb_place() > best.getNb_place()) { bestDispo = dispo; bestVehicleId = entry.getKey(); continue; }
+                        if (v.getNb_place() < best.getNb_place()) continue;
+                        // Même capacité : Diesel en priorité
+                        boolean vDiesel = "D".equalsIgnoreCase(v.getType_carburant() != null ? v.getType_carburant().trim() : "");
+                        boolean bestDiesel = "D".equalsIgnoreCase(best.getType_carburant() != null ? best.getType_carburant().trim() : "");
+                        if (vDiesel && !bestDiesel) { bestDispo = dispo; bestVehicleId = entry.getKey(); continue; }
+                        if (!vDiesel && bestDiesel) continue;
+                        // Même carburant : plus petit id
+                        if (v.getId() < best.getId()) { bestDispo = dispo; bestVehicleId = entry.getKey(); }
+                    }
+                    if (bestVehicleId < 0) break; // Plus aucun véhicule disponible aujourd'hui
+
+                    VoitureRow vehicle = vehicleById.get(bestVehicleId);
+                    LocalDateTime vehicleDispo = bestDispo;
+
+                    // --- Étape B : Constitution du lot de passagers ---
+                    // Fenêtre d'éligibilité : [vehicleDispo, vehicleDispo + attente]
+                    LocalDateTime windowEnd = vehicleDispo.plusMinutes(attenteMinutes);
+
+                    // Séparer les restes (déjà à l'aéroport) et les passagers frais éligibles
+                    List<PendingDemand> eligibleRemainders = new ArrayList<>();
+                    List<PendingDemand> eligibleFresh = new ArrayList<>();
+                    boolean hasFuturePassengers = false;
+
+                    for (PendingDemand pd : passengerQueue) {
+                        if (pd.remaining <= 0) continue;
+                        if (pd.isRemainder) {
+                            // Les restes sont déjà à l'aéroport, toujours éligibles
+                            eligibleRemainders.add(pd);
+                        } else {
+                            LocalDateTime arrival = LocalDateTime.parse(pd.reservation.getDate_heure_arrive());
+                            if (!arrival.isAfter(windowEnd)) {
+                                eligibleFresh.add(pd);
+                            } else {
+                                hasFuturePassengers = true;
+                            }
+                        }
+                    }
+
+                    // Si aucun passager éligible dans cette fenêtre
+                    if (eligibleRemainders.isEmpty() && eligibleFresh.isEmpty()) {
+                        if (hasFuturePassengers) {
+                            // Avancer la dispo du véhicule à l'heure du prochain passager
+                            LocalDateTime nextArrival = null;
+                            for (PendingDemand pd : passengerQueue) {
+                                if (pd.remaining <= 0 || pd.isRemainder) continue;
+                                LocalDateTime arr = LocalDateTime.parse(pd.reservation.getDate_heure_arrive());
+                                if (nextArrival == null || arr.isBefore(nextArrival)) {
+                                    nextArrival = arr;
+                                }
+                            }
+                            if (nextArrival != null && nextArrival.toLocalDate().equals(date)) {
+                                vehicleAvailableAt.put(bestVehicleId, nextArrival);
+                                continue;
+                            }
+                        }
+                        // Retirer ce véhicule du pool (il n'a plus personne à servir)
+                        vehicleAvailableAt.remove(bestVehicleId);
+                        continue;
+                    }
+
+                    // Trier les restes par remaining DESC (les plus gros restes d'abord)
+                    eligibleRemainders.sort(Comparator.comparingInt((PendingDemand pd) -> pd.remaining).reversed()
+                            .thenComparingInt(pd -> pd.reservation.getId()));
+
+                    // Remplir le véhicule
+                    VehicleBin bin = new VehicleBin(vehicle);
+                    LocalDateTime latestPassengerArrival = vehicleDispo;
+
+                    // 1) D'abord les restes (priorité absolue, plus gros d'abord)
+                    for (PendingDemand pd : eligibleRemainders) {
+                        if (bin.remainingCapacity() <= 0) break;
+                        int take = Math.min(bin.remainingCapacity(), pd.remaining);
+                        bin.addAllocation(pd.reservation, take);
+                        pd.remaining -= take;
+                        // Les restes sont déjà à l'aéroport, on utilise quand même leur heure d'arrivée initiale
+                        LocalDateTime arrival = LocalDateTime.parse(pd.reservation.getDate_heure_arrive());
+                        if (arrival.isAfter(latestPassengerArrival)) {
+                            latestPassengerArrival = arrival;
+                        }
+                    }
+
+                    // 2) Puis remplir avec les passagers frais (grouper par lieu, puis ordre prioritaire)
+                    List<PendingDemand> freshPool = new ArrayList<>(eligibleFresh);
+                    while (bin.remainingCapacity() > 0 && !freshPool.isEmpty()) {
+                        int seatsLeft = bin.remainingCapacity();
+                        PendingDemand best = null;
+                        int bestIdx = -1;
+                        int bestScore = Integer.MAX_VALUE;
+                        
+                        for (int i = 0; i < freshPool.size(); i++) {
+                            PendingDemand pd = freshPool.get(i);
+                            if (pd.remaining <= 0) continue;
+                            
+                            int score = i; // Favoriser les plus anciens / mondes
+                            
+                            boolean sameLieu = false;
+                            for (ReservationAllocation a : bin.allocations) {
+                                if (a.reservation.getId_lieu() == pd.reservation.getId_lieu()) {
+                                    sameLieu = true; break;
+                                }
+                            }
+                            
+                            if (sameLieu) {
+                                score -= 10000; // Priorité absolue pour le même hôtel
+                            }
+                            
+                            if (score < bestScore) {
+                                bestScore = score;
+                                best = pd;
+                                bestIdx = i;
+                            }
+                        }
+                        
+                        if (best == null || bestIdx < 0) break;
+                        freshPool.remove(bestIdx);
+
+                        int take = Math.min(bin.remainingCapacity(), best.remaining);
+                        bin.addAllocation(best.reservation, take);
+                        best.remaining -= take;
+
+                        LocalDateTime arrival = LocalDateTime.parse(best.reservation.getDate_heure_arrive());
+                        if (arrival.isAfter(latestPassengerArrival)) {
+                            latestPassengerArrival = arrival;
+                        }
+
+                        // Si split, marquer comme reste pour le prochain tour
+                        if (best.remaining > 0) {
+                            best.isRemainder = true;
+                        }
+                    }
+
+                    // Si rien n'a pu être chargé (cas théorique de garde)
+                    if (bin.allocations.isEmpty()) {
+                        vehicleAvailableAt.remove(bestVehicleId);
+                        continue;
+                    }
+
+                    // --- Calcul de l'heure de départ effectif ---
+                    // HeureDepart = MAX(ProchaineDispoVoiture, HeureArrivéeDuDernierPassagerMonté)
+                    LocalDateTime departEffectif = vehicleDispo.isAfter(latestPassengerArrival)
+                            ? vehicleDispo : latestPassengerArrival;
+
+                    // --- Ordonner les stops par distance depuis l'aéroport ---
+                    List<ReservationRow> ordered = new ArrayList<>();
+                    for (ReservationAllocation a : bin.allocations) {
+                        if (a != null && a.reservation != null) ordered.add(a.reservation);
+                    }
                     ordered.sort(Comparator
                             .comparingInt((ReservationRow r) -> distanceFromAirportKm(r.getId_lieu()))
                             .thenComparing(ReservationRow::getLieu_nom, Comparator.nullsLast(String::compareToIgnoreCase))
                             .thenComparingInt(ReservationRow::getId));
 
+                    // --- Étape C : Calcul du retour et rotation ---
                     LocalDateTime returnAt = computeReturnToAirportDateTime(departEffectif, ordered);
-                    LocalDateTime current = vehicleAvailableAt.getOrDefault(vehId, LocalDateTime.MIN);
-                    if (returnAt.isAfter(current)) vehicleAvailableAt.put(vehId, returnAt);
+                    // Mettre à jour la prochaine_dispo du véhicule
+                    vehicleAvailableAt.put(bestVehicleId, returnAt);
+                    // Incrémenter le compteur de trajets effectués par ce véhicule
+                    tripCountByVehicle.merge(bestVehicleId, 1, Integer::sum);
 
-                    // 1 tournée effectuée pour ce véhicule dans cette fenêtre
-                    tripCountByVehicle.put(vehId, tripCountByVehicle.getOrDefault(vehId, 0) + 1);
-                }
-            }
-        }
+                    // --- Persistance : tournee + tournee_stop + tournee_reservation ---
+                    LocalDateTime windowStart = vehicleDispo;
+                    LocalDateTime windowEndTs = windowStart.plusMinutes(attenteMinutes);
 
-        // 1.7 : Construire des fenêtres d'attente [t0, t0+attente] pour les réservations non assignées
-        List<ReservationWindow> pendingWindows = buildPendingWindows(pendingReservations);
+                    int nbTotal = 0;
+                    for (ReservationAllocation a : bin.allocations) nbTotal += a.nbAffectes;
 
-        // 2 : Pour chaque créneau, appliquer la planification
-        try (Connection con = DbUtil.getConnection()) {
-            con.setAutoCommit(false);
-            try {
-                List<PendingDemand> carryOverRemainders = new ArrayList<>();
-                int attenteMinutes = getAttente();
-                int autoWindowsCreated = 0;
-                int maxAutoWindows = 0;
+                    int tourneeId;
+                    try (PreparedStatement ps = con.prepareStatement(
+                            "INSERT INTO tournee(id_voiture, window_start, window_end, depart_effectif, retour_aeroport, nb_passagers_total) "
+                                    + "VALUES (?, ?, ?, ?, ?, ?)",
+                            Statement.RETURN_GENERATED_KEYS)) {
+                        ps.setInt(1, vehicle.getId());
+                        ps.setTimestamp(2, Timestamp.valueOf(windowStart));
+                        ps.setTimestamp(3, Timestamp.valueOf(windowEndTs));
+                        ps.setTimestamp(4, Timestamp.valueOf(departEffectif));
+                        ps.setTimestamp(5, Timestamp.valueOf(returnAt));
+                        ps.setInt(6, nbTotal);
+                        ps.executeUpdate();
 
-                for (int wIdx = 0; wIdx < pendingWindows.size(); wIdx++) {
-                    ReservationWindow w = pendingWindows.get(wIdx);
-                    LocalDateTime slot = w.windowStart;
-                    List<ReservationRow> slotReservations = new ArrayList<>(w.reservations);
-
-                    boolean hasNextWindow = wIdx < pendingWindows.size() - 1;
-                    boolean canAutoCreateNextWindow = attenteMinutes > 0
-                            && autoWindowsCreated < maxAutoWindows
-                            && slot.plusMinutes(attenteMinutes).toLocalDate().equals(date);
-                    boolean canCarryToNext = hasNextWindow || canAutoCreateNextWindow;
-
-                    // Départ effectif commun à tous les véhicules de cette fenêtre.
-                    // On le calcule APRÈS l'affectation: max(windowStart, disponibilité réelle des véhicules utilisés).
-                    LocalDateTime departEffectifFenetre = slot;
-
-                    // Priorité : ordre décroissant du nombre de personnes
-                    slotReservations.sort(Comparator.comparingInt(ReservationRow::getNombre_passager).reversed()
-                            .thenComparingInt(ReservationRow::getId));
-
-                    Map<Integer, VehicleBin> slotBins = binsBySlot.computeIfAbsent(slot, k -> new LinkedHashMap<>());
-                    Set<Integer> usedVehicleIdsInSlot = new HashSet<>(slotBins.keySet());
-
-                    // Interdire l'utilisation des véhicules dont la disponibilité est après la fin de fenêtre.
-                    // S'ils reviennent avant windowEnd, ils peuvent participer au créneau (départ effectif recalé ensuite).
-                    LocalDateTime windowEndForAvailability = slot.plusMinutes(getAttente());
-                    for (Map.Entry<Integer, LocalDateTime> av : vehicleAvailableAt.entrySet()) {
-                        if (av.getValue() != null && av.getValue().isAfter(windowEndForAvailability)) {
-                            usedVehicleIdsInSlot.add(av.getKey());
+                        try (ResultSet keys = ps.getGeneratedKeys()) {
+                            if (!keys.next()) throw new RuntimeException("Impossible de récupérer l'id de la tournée insérée");
+                            tourneeId = keys.getInt(1);
                         }
                     }
 
-                    // NB : un même véhicule peut être réutilisé sur un autre créneau => pas de liste globale "available"
-                    LinkedList<PendingDemand> freshQueue = new LinkedList<>();
-                    for (ReservationRow r : slotReservations) {
-                        if (r == null || r.getId() <= 0) continue;
-                        freshQueue.add(new PendingDemand(r, r.getNombre_passager(), false));
-                    }
-                    List<PendingDemand> remainderQueue = new ArrayList<>();
-                    if (!carryOverRemainders.isEmpty()) {
-                        remainderQueue.addAll(carryOverRemainders);
-                        carryOverRemainders.clear();
-                    }
-
-                    PendingDemand forcedNextDemand = null;
-
-                    while (forcedNextDemand != null || !remainderQueue.isEmpty() || !freshQueue.isEmpty()) {
-                        PendingDemand d;
-                        if (forcedNextDemand != null) {
-                            d = forcedNextDemand;
-                            forcedNextDemand = null;
-                        } else {
-                            d = pickMaxRemainingAndRemoveFromQueues(remainderQueue, freshQueue);
-                        }
-                        if (d == null || d.reservation == null || d.remaining <= 0) continue;
-
-                        // 1) Tenter de placer entièrement dans un bin existant
-                        VehicleBin bestFitExisting = findBestFitExistingBin(slotBins.values(), d.remaining);
-                        if (bestFitExisting != null) {
-                            bestFitExisting.addAllocation(d.reservation, d.remaining);
-                            continue;
-                        }
-
-                        // 2) Sinon, split possible dans un bin existant partiellement rempli
-                        VehicleBin partialBin = findBestPartialBin(slotBins.values());
-                        if (partialBin != null) {
-                            int take = Math.min(partialBin.remainingCapacity(), d.remaining);
-                            partialBin.addAllocation(d.reservation, take);
-                            d.remaining -= take;
-                            if (d.remaining > 0) {
-                                insertRemainderPrioritized(remainderQueue, new PendingDemand(d.reservation, d.remaining, true));
-                            }
-                            continue;
-                        }
-
-                        // 3) Ouvrir un nouveau véhicule (split autorisé)
-                        List<Integer> remainingPassengers = new ArrayList<>();
-                        for (PendingDemand rr : remainderQueue) remainingPassengers.add(rr.remaining);
-                        for (PendingDemand fr : freshQueue) remainingPassengers.add(fr.remaining);
-                        VoitureRow newVehicle = findVehicleForNewBinWithSplit(vehicles, usedVehicleIdsInSlot, d.remaining, remainingPassengers, tripCountByVehicle, d.isRemainder);
-                        if (newVehicle == null) {
-                            if (canCarryToNext) {
-                                removeFromUnassignedBySlot(unassignedBySlot, d.reservation.getId());
-                                ReservationRow u = new ReservationRow(d.reservation.getId(), d.reservation.getId_client(), d.remaining, d.reservation.getDate_heure_arrive(), d.reservation.getId_lieu(), d.reservation.getLieu_nom());
-                                String slotKey = slot != null ? slot.toString().replace("T", " ") : "";
-                                unassignedBySlot.computeIfAbsent(slotKey, k -> new ArrayList<>()).add(u);
-                                insertRemainderPrioritized(carryOverRemainders, new PendingDemand(d.reservation, d.remaining, true));
-                            } else {
-                                removeFromUnassignedBySlot(unassignedBySlot, d.reservation.getId());
-                                ReservationRow u = new ReservationRow(d.reservation.getId(), d.reservation.getId_client(), d.remaining, d.reservation.getDate_heure_arrive(), d.reservation.getId_lieu(), d.reservation.getLieu_nom());
-                                unassigned.add(u);
-                                String slotKey = slot != null ? slot.toString().replace("T", " ") : "";
-                                unassignedBySlot.computeIfAbsent(slotKey, k -> new ArrayList<>()).add(u);
-                            }
-                            continue;
-                        }
-
-                        usedVehicleIdsInSlot.add(newVehicle.getId());
-                        VehicleBin bin = new VehicleBin(newVehicle);
-                        slotBins.put(newVehicle.getId(), bin);
-
-                        // Affecter d'abord la demande courante
-                        int take = Math.min(bin.remainingCapacity(), d.remaining);
-                        bin.addAllocation(d.reservation, take);
-                        d.remaining -= take;
-                        if (d.remaining > 0) {
-                            PendingDemand rem = new PendingDemand(d.reservation, d.remaining, true);
-                            // Si on vient d'ouvrir un véhicule plus petit que la demande (split dès l'ouverture),
-                            // on force le traitement immédiat du reliquat pour respecter la logique attendue.
-                            if (!d.isRemainder && newVehicle.getNb_place() < take + d.remaining) {
-                                forcedNextDemand = rem;
-                            } else {
-                                insertRemainderPrioritized(remainderQueue, rem);
-                            }
-                        }
-
-                        // Remplissage immédiat : prioriser les restes, puis les nouvelles réservations
-                        while (bin.remainingCapacity() > 0 && (!remainderQueue.isEmpty() || !freshQueue.isEmpty())) {
-                            int seatsLeft = bin.remainingCapacity();
-                            PendingDemand next;
-                            next = pickClosestFitAndRemoveFromQueues(remainderQueue, freshQueue, seatsLeft);
-                            if (next == null || next.reservation == null || next.remaining <= 0) continue;
-
-                            int takeNext = Math.min(bin.remainingCapacity(), next.remaining);
-                            bin.addAllocation(next.reservation, takeNext);
-                            next.remaining -= takeNext;
-                            if (next.remaining > 0) {
-                                insertRemainderPrioritized(remainderQueue, new PendingDemand(next.reservation, next.remaining, true));
-                            }
-                        }
+                    // Stops uniques par lieu
+                    Map<Integer, LocalDateTime> arrivalByLieu = new LinkedHashMap<>();
+                    LocalDateTime t = departEffectif;
+                    double vitesse = getVitesse();
+                    int prevLieu = 1;
+                    for (ReservationRow stop : ordered) {
+                        int lieuId = stop.getId_lieu();
+                        if (arrivalByLieu.containsKey(lieuId)) continue;
+                        int dist = getDistanceSmart(prevLieu, lieuId);
+                        long minutes = Math.round(((double) dist / vitesse) * 60);
+                        t = t.plusMinutes(minutes);
+                        arrivalByLieu.put(lieuId, t);
+                        prevLieu = lieuId;
                     }
 
-                    // Mettre à jour la disponibilité des véhicules utilisés dans ce créneau
-                    // + calculer le départ effectif comme le max des disponibilités des véhicules réellement utilisés.
-                    LocalDateTime computedDepartEffectif = slot;
-                    for (VehicleBin b : slotBins.values()) {
-                        if (b == null || b.vehicle == null) continue;
-                        if (b.allocations == null || b.allocations.isEmpty()) continue;
-                        LocalDateTime av = vehicleAvailableAt.getOrDefault(b.vehicle.getId(), LocalDateTime.MIN);
-                        if (av != null && av.isAfter(computedDepartEffectif)) computedDepartEffectif = av;
-                    }
-                    departEffectifFenetre = computedDepartEffectif;
-
-                    for (VehicleBin b : slotBins.values()) {
-                        List<ReservationRow> ordered = new ArrayList<>();
-                        for (ReservationAllocation a : b.allocations) {
-                            if (a == null || a.reservation == null) continue;
-                            ordered.add(a.reservation);
-                        }
-                        ordered.sort(Comparator
-                                .comparingInt((ReservationRow r) -> distanceFromAirportKm(r.getId_lieu()))
-                                .thenComparing(ReservationRow::getLieu_nom, Comparator.nullsLast(String::compareToIgnoreCase))
-                                .thenComparingInt(ReservationRow::getId));
-                        LocalDateTime returnAt = computeReturnToAirportDateTime(departEffectifFenetre, ordered);
-                        LocalDateTime current = vehicleAvailableAt.getOrDefault(b.vehicle.getId(), LocalDateTime.MIN);
-                        if (returnAt.isAfter(current)) vehicleAvailableAt.put(b.vehicle.getId(), returnAt);
-                    }
-
-                    // Incrémenter le compteur de trajets (1 par véhicule réellement utilisé dans cette fenêtre)
-                    for (VehicleBin b : slotBins.values()) {
-                        if (b == null || b.vehicle == null) continue;
-                        if (b.allocations == null || b.allocations.isEmpty()) continue;
-                        int vehId = b.vehicle.getId();
-                        tripCountByVehicle.put(vehId, tripCountByVehicle.getOrDefault(vehId, 0) + 1);
-                    }
-
-                    // Persist pour ce créneau : création d'une tournée par véhicule réellement utilisé
-                    // + insertion des stops + liaison tournee_reservation
-                    LocalDateTime windowEnd = slot.plusMinutes(getAttente());
-                    for (VehicleBin b : slotBins.values()) {
-                        if (b == null || b.vehicle == null) continue;
-                        if (b.allocations == null || b.allocations.isEmpty()) continue;
-
-                        List<ReservationRow> ordered = new ArrayList<>();
-                        for (ReservationAllocation a : b.allocations) {
-                            if (a == null || a.reservation == null) continue;
-                            ordered.add(a.reservation);
-                        }
-                        ordered.sort(Comparator
-                                .comparingInt((ReservationRow r) -> distanceFromAirportKm(r.getId_lieu()))
-                                .thenComparing(ReservationRow::getLieu_nom, Comparator.nullsLast(String::compareToIgnoreCase))
-                                .thenComparingInt(ReservationRow::getId));
-
-                        LocalDateTime retourAt = computeReturnToAirportDateTime(departEffectifFenetre, ordered);
-
-                        int nbTotal = 0;
-                        for (ReservationAllocation a : b.allocations) nbTotal += a.nbAffectes;
-
-                        int tourneeId;
+                    int ordre = 1;
+                    for (Map.Entry<Integer, LocalDateTime> e : arrivalByLieu.entrySet()) {
                         try (PreparedStatement ps = con.prepareStatement(
-                                "INSERT INTO tournee(id_voiture, window_start, window_end, depart_effectif, retour_aeroport, nb_passagers_total) "
-                                        + "VALUES (?, ?, ?, ?, ?, ?)",
-                                Statement.RETURN_GENERATED_KEYS)) {
-                            ps.setInt(1, b.vehicle.getId());
-                            ps.setTimestamp(2, Timestamp.valueOf(slot));
-                            ps.setTimestamp(3, Timestamp.valueOf(windowEnd));
-                            ps.setTimestamp(4, Timestamp.valueOf(departEffectifFenetre));
-                            ps.setTimestamp(5, Timestamp.valueOf(retourAt));
-                            ps.setInt(6, nbTotal);
+                                "INSERT INTO tournee_stop(id_tournee, ordre, id_lieu, heure_arrivee) VALUES (?, ?, ?, ?)")) {
+                            ps.setInt(1, tourneeId);
+                            ps.setInt(2, ordre);
+                            ps.setInt(3, e.getKey());
+                            ps.setTimestamp(4, Timestamp.valueOf(e.getValue()));
                             ps.executeUpdate();
-
-                            try (ResultSet keys = ps.getGeneratedKeys()) {
-                                if (!keys.next()) throw new RuntimeException("Impossible de récupérer l'id de la tournée insérée");
-                                tourneeId = keys.getInt(1);
-                            }
                         }
-
-                        // Construire la liste des stops uniques par lieu, dans l'ordre de desserte.
-                        // Plusieurs réservations peuvent partager le même lieu => un seul stop.
-                        Map<Integer, LocalDateTime> arrivalByLieu = new LinkedHashMap<>();
-                        LocalDateTime t = departEffectifFenetre;
-                        double vitesse = getVitesse();
-                        int prevLieu = 1;
-                        for (ReservationRow stop : ordered) {
-                            int lieuId = stop.getId_lieu();
-                            if (arrivalByLieu.containsKey(lieuId)) continue;
-                            int dist = getDistanceSmart(prevLieu, lieuId);
-                            long minutes = Math.round(((double) dist / vitesse) * 60);
-                            t = t.plusMinutes(minutes);
-                            arrivalByLieu.put(lieuId, t);
-                            prevLieu = lieuId;
-                        }
-
-                        int ordre = 1;
-                        for (Map.Entry<Integer, LocalDateTime> e : arrivalByLieu.entrySet()) {
-                            try (PreparedStatement ps = con.prepareStatement(
-                                    "INSERT INTO tournee_stop(id_tournee, ordre, id_lieu, heure_arrivee) VALUES (?, ?, ?, ?)")) {
-                                ps.setInt(1, tourneeId);
-                                ps.setInt(2, ordre);
-                                ps.setInt(3, e.getKey());
-                                ps.setTimestamp(4, Timestamp.valueOf(e.getValue()));
-                                ps.executeUpdate();
-                            }
-                            ordre++;
-                        }
-
-                        // Lier les réservations à la tournée (allocation partielle)
-                        for (ReservationAllocation a : b.allocations) {
-                            if (a == null || a.reservation == null) continue;
-                            if (a.reservation.getId() <= 0) continue;
-                            if (a.nbAffectes <= 0) continue;
-                            try (PreparedStatement ps = con.prepareStatement(
-                                    "INSERT INTO tournee_reservation(id_tournee, id_reservation, nb_passagers_affectes) VALUES (?, ?, ?)")) {
-                                ps.setInt(1, tourneeId);
-                                ps.setInt(2, a.reservation.getId());
-                                ps.setInt(3, a.nbAffectes);
-                                ps.executeUpdate();
-                            }
-                        }
+                        ordre++;
                     }
 
-                    // Option B : si des restes existent encore et qu'il n'y a pas de créneau suivant,
-                    // créer automatiquement un nouveau créneau (slot + attente) pour réessayer.
-                    if (!carryOverRemainders.isEmpty() && wIdx == pendingWindows.size() - 1 && canAutoCreateNextWindow) {
-                        LocalDateTime nextSlot = slot.plusMinutes(attenteMinutes);
-                        pendingWindows.add(new ReservationWindow(nextSlot, Collections.emptyList()));
-                        autoWindowsCreated++;
+                    // Liaison tournee_reservation
+                    for (ReservationAllocation a : bin.allocations) {
+                        if (a == null || a.reservation == null) continue;
+                        if (a.reservation.getId() <= 0 || a.nbAffectes <= 0) continue;
+                        try (PreparedStatement ps = con.prepareStatement(
+                                "INSERT INTO tournee_reservation(id_tournee, id_reservation, nb_passagers_affectes) VALUES (?, ?, ?)")) {
+                            ps.setInt(1, tourneeId);
+                            ps.setInt(2, a.reservation.getId());
+                            ps.setInt(3, a.nbAffectes);
+                            ps.executeUpdate();
+                        }
                     }
-                }
+                } // fin while
 
                 con.commit();
             } catch (Exception ex) {
@@ -726,41 +674,11 @@ public class ReservationController {
             throw new RuntimeException(ex);
         }
 
-        // 3 : Construire la réponse (assigned/unassigned/unusedVehicles)
-        // On relit les réservations assignées depuis la base, et on les ordonne par règles de desserte
+        // Étape 7 : Construire la réponse
         assigned.addAll(getAssignedReservationsForDate(date, vehicles));
-
-        // Réconcilier les restes (unassignedBySlot) avec l'état final en base.
-        // Si une réservation a finalement été totalement assignée dans un créneau ultérieur, elle ne doit plus apparaître ici.
-        // Si elle est encore non assignée partiellement, on met à jour le nombre de passagers restants.
         List<ReservationRow> finalUnassigned = getUnassignedReservationsForDate(date);
-        Map<Integer, Integer> remainingByReservationId = new HashMap<>();
-        for (ReservationRow r : finalUnassigned) {
-            if (r == null) continue;
-            remainingByReservationId.put(r.getId(), r.getNombre_passager());
-        }
-        for (Map.Entry<String, List<ReservationRow>> e : unassignedBySlot.entrySet()) {
-            List<ReservationRow> rows = e.getValue();
-            if (rows == null) continue;
-            Iterator<ReservationRow> it = rows.iterator();
-            while (it.hasNext()) {
-                ReservationRow r = it.next();
-                if (r == null) {
-                    it.remove();
-                    continue;
-                }
-                Integer rem = remainingByReservationId.get(r.getId());
-                if (rem == null || rem <= 0) {
-                    it.remove();
-                } else {
-                    r.setNombre_passager(rem);
-                }
-            }
-        }
-        unassignedBySlot.entrySet().removeIf(en -> en.getValue() == null || en.getValue().isEmpty());
         unassigned = finalUnassigned;
 
-        // "unusedVehicles" = véhicules jamais utilisés sur la date (tous créneaux confondus)
         Set<Integer> usedVehicleIdsForDay = new HashSet<>();
         for (Map<String, Object> trip : assigned) {
             VoitureRow v = (VoitureRow) trip.get("vehiculeDetails");
@@ -1337,7 +1255,7 @@ public class ReservationController {
     private static class PendingDemand {
         final ReservationRow reservation;
         int remaining;
-        final boolean isRemainder;
+        boolean isRemainder;
 
         PendingDemand(ReservationRow reservation, int remaining, boolean isRemainder) {
             this.reservation = reservation;
