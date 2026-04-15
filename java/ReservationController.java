@@ -519,41 +519,38 @@ public class ReservationController {
                         }
                     }
 
-                    // 2) Puis remplir avec les passagers frais (closest-fit pour optimiser)
+                    // 2) Puis remplir avec les passagers frais (grouper par lieu, puis ordre prioritaire)
                     List<PendingDemand> freshPool = new ArrayList<>(eligibleFresh);
                     while (bin.remainingCapacity() > 0 && !freshPool.isEmpty()) {
                         int seatsLeft = bin.remainingCapacity();
-                        // Trouver le passager dont le remaining est le plus proche de seatsLeft
                         PendingDemand best = null;
                         int bestIdx = -1;
                         int bestScore = Integer.MAX_VALUE;
+                        
                         for (int i = 0; i < freshPool.size(); i++) {
                             PendingDemand pd = freshPool.get(i);
                             if (pd.remaining <= 0) continue;
-                            int score = Math.abs(pd.remaining - seatsLeft);
+                            
+                            int score = i; // Favoriser les plus anciens / mondes
+                            
+                            boolean sameLieu = false;
+                            for (ReservationAllocation a : bin.allocations) {
+                                if (a.reservation.getId_lieu() == pd.reservation.getId_lieu()) {
+                                    sameLieu = true; break;
+                                }
+                            }
+                            
+                            if (sameLieu) {
+                                score -= 10000; // Priorité absolue pour le même hôtel
+                            }
+                            
                             if (score < bestScore) {
                                 bestScore = score;
                                 best = pd;
                                 bestIdx = i;
-                            } else if (score == bestScore) {
-                                // Tie-breakers : Plus gros groupe > Plus proche > Nom alphabétique
-                                if (pd.remaining > (best != null ? best.remaining : 0)) {
-                                    best = pd; bestIdx = i;
-                                } else if (pd.remaining == (best != null ? best.remaining : 0)) {
-                                    int distV = distanceFromAirportKm(pd.reservation.getId_lieu());
-                                    int distBest = distanceFromAirportKm(best.reservation.getId_lieu());
-                                    if (distV < distBest) {
-                                        best = pd; bestIdx = i;
-                                    } else if (distV == distBest) {
-                                        String nameV = pd.reservation.getLieu_nom() != null ? pd.reservation.getLieu_nom() : "";
-                                        String nameBest = best.reservation.getLieu_nom() != null ? best.reservation.getLieu_nom() : "";
-                                        if (nameV.compareToIgnoreCase(nameBest) < 0) {
-                                            best = pd; bestIdx = i;
-                                        }
-                                    }
-                                }
                             }
                         }
+                        
                         if (best == null || bestIdx < 0) break;
                         freshPool.remove(bestIdx);
 
